@@ -1,0 +1,4 @@
+pandas==3.0.2
+paramiko==3.5.1
+dag-factory==1.0.1
+apache-airflow-providers-sftp==5.7.4
