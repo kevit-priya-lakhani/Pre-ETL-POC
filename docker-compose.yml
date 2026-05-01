@@ -99,6 +99,20 @@ services:
     restart: always
 
   # ----------------------------------------------------------
+  # Airflow DAG Processor (required in Airflow 3.0 to parse DAG files)
+  # ----------------------------------------------------------
+  airflow-dag-processor:
+    <<: *airflow-common
+    command: dag-processor
+    healthcheck:
+      test: ["CMD-SHELL", 'airflow jobs check --job-type DagProcessorJob --hostname "$${HOSTNAME}"']
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    restart: always
+
+  # ----------------------------------------------------------
   # SFTP Server  →  sftp://localhost:2222
   # Credentials: sftp / password
   # Upload directory: /home/sftp/upload
