@@ -28,9 +28,11 @@ def upsert_sftp_connection(
     extra_json = json.dumps(extra or {})
 
     try:
+        LOGGER.info("Upserting SFTP connection %s", conn_id)
         connection = session.query(Connection).filter(Connection.conn_id == conn_id).one_or_none()
 
         if connection is None:
+            LOGGER.info("Creating new SFTP connection %s", conn_id)
             connection = Connection(
                 conn_id=conn_id,
                 conn_type="sftp",
@@ -43,6 +45,7 @@ def upsert_sftp_connection(
             session.add(connection)
             action = "created"
         else:
+            LOGGER.info("Updating existing SFTP connection %s", conn_id)
             connection.conn_type = "sftp"
             connection.host = host
             connection.port = port

@@ -21,11 +21,14 @@ x-airflow-common:
     AIRFLOW__API__AUTH_BACKENDS: 'airflow.api.auth.backend.basic_auth,airflow.api.auth.backend.session'
     AIRFLOW__CORE__SIMPLE_AUTH_MANAGER_USERS: 'admin:admin'
     AIRFLOW__CORE__SIMPLE_AUTH_MANAGER_ALL_ADMINS: 'true'
+    AIRFLOW__WORKERS__BASE_URL: 'http://airflow-webserver:8080'
+    AIRFLOW__CORE__EXECUTION_API_SERVER_URL: 'http://airflow-webserver:8080/execution/'
+    AIRFLOW__WEBSERVER__SECRET_KEY: '69ec771e212b96df758b6a7f069d9b935ae00ec89aea5108ef89be8b972a1371'
     _PIP_ADDITIONAL_REQUIREMENTS: ''
   volumes:
     - ./dags:/opt/airflow/dags
     - ./include:/opt/airflow/include
-    - ./logs:/opt/airflow/logs
+    - airflow_logs:/opt/airflow/logs
     - ./plugins:/opt/airflow/plugins
   depends_on:
     postgres:
@@ -89,6 +92,7 @@ services:
   # ----------------------------------------------------------
   airflow-scheduler:
     <<: *airflow-common
+    hostname: airflow-scheduler
     command: scheduler
     healthcheck:
       test: ["CMD-SHELL", 'airflow jobs check --job-type SchedulerJob --hostname "$${HOSTNAME}"']
@@ -154,3 +158,5 @@ volumes:
   postgres-db-volume:
   sftp-data:
   oracle-data:
+  airflow_logs:
+
