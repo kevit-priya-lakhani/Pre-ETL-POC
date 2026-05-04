@@ -1,4 +1,1 @@
-pandas==3.0.2
-paramiko==3.5.1
-dag-factory==1.0.1
-apache-airflow-providers-sftp==5.7.4
+# Astro Runtime includes the following pre-installed providers packages: https://www.astronomer.io/docs/astro/runtime-image-architecture#provider-packages
