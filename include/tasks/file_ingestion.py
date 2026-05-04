@@ -1,16 +1,9 @@
-import json
 import logging
 from pathlib import Path
 
 import pandas as pd
-from airflow import settings
 from airflow.exceptions import AirflowException
 from airflow.providers.sftp.hooks.sftp import SFTPHook
-
-try:
-    from airflow.models.connection import Connection
-except ImportError:
-    from airflow.models import Connection
 
 
 LOGGER = logging.getLogger(__name__)
@@ -24,41 +17,23 @@ def upsert_sftp_connection(
     password: str | None = None,
     extra: dict | None = None,
 ) -> str:
-    session = settings.Session()
-    extra_json = json.dumps(extra or {})
+    """Validate that the connection is resolvable.
 
-    try:
-        LOGGER.info("Upserting SFTP connection %s", conn_id)
-        connection = session.query(Connection).filter(Connection.conn_id == conn_id).one_or_none()
-
-        if connection is None:
-            LOGGER.info("Creating new SFTP connection %s", conn_id)
-            connection = Connection(
-                conn_id=conn_id,
-                conn_type="sftp",
-                host=host,
-                port=port,
-                login=username,
-                password=password,
-                extra=extra_json,
-            )
-            session.add(connection)
-            action = "created"
-        else:
-            LOGGER.info("Updating existing SFTP connection %s", conn_id)
-            connection.conn_type = "sftp"
-            connection.host = host
-            connection.port = port
-            connection.login = username
-            connection.password = password
-            connection.extra = extra_json
-            action = "updated"
-
-        session.commit()
-        LOGGER.info("SFTP connection %s %s", conn_id, action)
-        return conn_id
-    finally:
-        session.close()
+    In Airflow 3.0, connections must be defined externally (env vars, secrets
+    backend, or the UI) rather than written to the DB from within a task.
+    The env var AIRFLOW_CONN_<CONN_ID_UPPER> is the recommended approach and
+    is picked up automatically — no DB write is required.
+    """
+    LOGGER.info(
+        "Verifying SFTP connection '%s' is resolvable (expected via AIRFLOW_CONN_%s env var)",
+        conn_id,
+        conn_id.upper(),
+    )
+    hook = SFTPHook(ssh_conn_id=conn_id)
+    # Accessing the connection property forces resolution; raises if not found.
+    _ = hook.get_connection(conn_id)
+    LOGGER.info("SFTP connection '%s' resolved successfully", conn_id)
+    return conn_id
 
 
 def validate_sftp_connection(conn_id: str, remote_path: str) -> dict:

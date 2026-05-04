@@ -13,6 +13,9 @@ services:
     command: sftp:password:1000:100:upload
     volumes:
       - sftp-data:/home/sftp/upload
+    networks:
+      - airflow
+      - default
     restart: always
 
   # ----------------------------------------------------------
@@ -29,6 +32,9 @@ services:
       ORACLE_PASSWORD: password
     volumes:
       - oracle-data:/opt/oracle/oradata
+    networks:
+      - airflow
+      - default
     healthcheck:
       test: ["CMD-SHELL", "echo 'SELECT 1 FROM DUAL;' | sqlplus -s system/password@localhost/XEPDB1 | grep -q 1"]
       interval: 30s
@@ -36,6 +42,9 @@ services:
       retries: 10
       start_period: 120s
     restart: always
+
+networks:
+  airflow: {}
 
 volumes:
   sftp-data:
