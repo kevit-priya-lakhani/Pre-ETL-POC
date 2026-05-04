@@ -11,11 +11,7 @@ LOGGER = logging.getLogger(__name__)
 
 def upsert_sftp_connection(
     conn_id: str,
-    host: str,
-    port: int = 22,
-    username: str | None = None,
-    password: str | None = None,
-    extra: dict | None = None,
+    
 ) -> str:
     """Validate that the connection is resolvable.
 

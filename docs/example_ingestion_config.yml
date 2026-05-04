@@ -1,0 +1,179 @@
+# ============================================================
+# Pre-ETL Ingestion Source Configuration — Reference / Example
+#
+# This file documents every supported parameter for an SFTP
+# ingestion source.  Keys marked (optional) may be omitted.
+# Keys marked (required if …) are conditional on another setting.
+#
+# Code mapping notes are included inline for feasibility clarity.
+# ============================================================
+
+# ------------------------------------------------------------------
+# File identification — provide exactly ONE of: name | name_regex
+# ------------------------------------------------------------------
+file:
+  remote_directory: /upload/
+  # name: directors_2024_01.csv            # exact filename
+  name_regex: "directors_\\d{6}\\.csv" # OR Python re pattern (mutually exclusive with name), matches with all files in the remote_directory 
+                                          #optionally with timestamp patterns to select the latest file (e.g. directors_20240601.csv, directors_20240602.csv, etc.)
+  local_directory: /tmp/pre_etl          # where to land the files locally
+  # paramter that specifies  whether to take the file with the latest timestamp  or take all the files that match the name_regex pattern
+  name_regex_selection: latest           # latest | all (default: latest)
+
+# ------------------------------------------------------------------
+# Format
+# ------------------------------------------------------------------
+format:
+  type: delimited                        # delimited | fixed
+
+  # ---- Delimited-only keys (ignored when type == fixed) ----------
+  delimiter: ","                         # "," | "|" | "\t" | ";" — maps to pd.read_csv(sep=)
+  enclosing_character: '"'              # quotechar for wrapped fields — maps to pd.read_csv(quotechar=)
+                                         # set to null or omit to disable
+
+  # ---- Shared keys (both types) ----------------------------------
+  encoding: UTF-8                        # UTF-8 | UTF-16 | UTF-16-BOM | ANSI — maps to pd.read_csv(encoding=)
+  line_ending: "\n"                      # "\n" (LF) | "\r\n" (CRLF) — maps to pd.read_csv(lineterminator=)
+  has_header: true                       # true → header=0 | false → header=None (names from schema)
+  ignore_line_prefix: "#"              # (optional) rows starting with this prefix are discarded
+  
+  
+  ###****TODO: skip count should be configured PER file
+  skip_count: 0                          # (optional) rows to skip before the header/data — maps to pd.read_csv(skiprows=)
+                                         # maps to pd.read_csv(comment=)
+
+# ------------------------------------------------------------------
+# Schema
+#   • Required when has_header: false (provides column names + types)
+#   • Optional when has_header: true  (use to rename/cast/validate)
+#   • For fixed-width files: also supply start+end OR width per column
+#
+# Supported types: string | integer | float | boolean | date | datetime
+# ------------------------------------------------------------------
+schema:
+  - name: director_name
+    type: string
+
+    # Fixed-width positioning — choose ONE style (omit for delimited files):
+    # Style A — explicit byte range (1-based, inclusive):
+    #   start: 1
+    #   end: 50
+    # Style B — column width (columns are read sequentially left-to-right):
+    #   width: 50
+
+    # Validation rules
+    not_null: true
+    min_length: 2
+    max_length: 100
+    regex: "^[A-Za-z .'-]+$"            # Python re.fullmatch pattern
+
+  - name: film_count
+    type: integer
+    not_null: true
+    min: 0                               # inclusive lower bound
+    max: 9999                            # inclusive upper bound
+    unique: false                        # true → flag duplicate values in this column
+
+  - name: genre
+    type: string
+    allowed_values:                      # enum / lookup list; any value outside this list is a bad record
+      - Drama
+      - Comedy
+      - Action
+      - Thriller
+      - Documentary
+
+  - name: debut_date
+    type: date
+    date_format: "%Y-%m-%d"             # strftime format — maps to pd.to_datetime(format=)
+
+  - name: gross_revenue
+    type: float
+    min: 0.0
+    # max: omitted — unbounded
+
+
+# ------------------------------------------------------------------
+# Bad-record handling
+#   A "bad record" is any row that fails type casting or a validation rule.
+# ------------------------------------------------------------------
+bad_records:
+  handling: move                         # skip  → discard silently
+                                         # move  → write to bad_records_path
+                                         # fail  → raise AirflowException when threshold is breached
+
+  threshold: 10                          # numeric value (meaning depends on threshold_type)
+  threshold_type: percentage             # percentage | count
+                                         # percentage: fail if bad% > threshold
+                                         # count:      fail if bad row count > threshold
+  bad_records_path: /tmp/pre_etl/bad/   # required (and only used) when handling == move
+
+# ------------------------------------------------------------------
+# Empty-file handling
+# ------------------------------------------------------------------
+empty_file_handling: fail                # skip → mark task success, pass nothing downstream
+                                         # log  → log a warning, mark task success
+                                         # fail → raise AirflowException
+min_record_threshold: 1                        # (optional) minimum number of records required to avoid empty-file handling
+
+# ------------------------------------------------------------------
+# Post-parse filter
+#   Applied AFTER schema casting and type coercion.
+#   Only rows that SATISFY this condition are passed downstream.
+#   Supports pandas df.query() syntax.
+# ------------------------------------------------------------------
+filter_condition: "film_count > 0 and genre in ['Drama', 'Comedy']"
+
+
+
+# ==================================================================
+# ALTERNATIVE EXAMPLE — Fixed-width file (uncomment to use)
+# ==================================================================
+# source_name: example_fixed_width_feed
+#
+# connection:
+#   conn_id: sftp_default
+#
+# sensor:
+#   poke_interval: 60
+#   timeout: 3600
+#   mode: reschedule
+#
+# file:
+#   remote_directory: /upload/
+#   name: directors_fixed.txt
+#   local_directory: /tmp/pre_etl
+#
+# format:
+#   type: fixed
+#   encoding: UTF-8
+#   line_ending: "\r\n"
+#   has_header: false
+#   skip_count: 1                        # skip a title row at the top of the file
+#   ignore_line_prefix: "**"
+#
+# schema:
+#   # Style A — start/end positions (maps to pd.read_fwf(colspecs=[(start-1, end)]))
+#   - name: director_name
+#     type: string
+#     start: 1
+#     end: 50
+#     not_null: true
+#
+#   # Style B — widths only (maps to pd.read_fwf(widths=[10, 6, 8, ...]))
+#   - name: film_count
+#     type: integer
+#     width: 6
+#     min: 0
+#
+#   - name: debut_date
+#     type: date
+#     width: 8
+#     date_format: "%Y%m%d"
+#
+# bad_records:
+#   threshold: 5
+#   threshold_type: count
+#   handling: log
+#
+# empty_file_handling: skip

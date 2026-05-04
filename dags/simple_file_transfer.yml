@@ -17,13 +17,6 @@ simple_file_transfer:
       python_callable: include.tasks.file_ingestion.upsert_sftp_connection
       op_kwargs:
         conn_id: sftp_default
-        host: sftp
-        port: 22
-        username: sftp
-        password: password
-        extra:
-          no_host_key_check: "true"
-
     validate_sftp_connection:
       operator: airflow.providers.standard.operators.python.PythonOperator
       python_callable: include.tasks.file_ingestion.validate_sftp_connection
