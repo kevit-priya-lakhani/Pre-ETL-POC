@@ -1,0 +1,42 @@
+services:
+
+  # ----------------------------------------------------------
+  # SFTP Server  →  sftp://localhost:2222
+  # Credentials: sftp / password
+  # Upload directory: /home/sftp/upload
+  # Connect: sftp -P 2222 sftp@localhost
+  # ----------------------------------------------------------
+  sftp:
+    image: atmoz/sftp
+    ports:
+      - "2222:22"
+    command: sftp:password:1000:100:upload
+    volumes:
+      - sftp-data:/home/sftp/upload
+    restart: always
+
+  # ----------------------------------------------------------
+  # Oracle XE  →  localhost:1521  |  EM Express: https://localhost:5500/em
+  # SYSTEM password: password
+  # JDBC URL: jdbc:oracle:thin:@localhost:1521/XEPDB1
+  # ----------------------------------------------------------
+  oracle:
+    image: gvenzl/oracle-xe
+    ports:
+      - "1521:1521"
+      - "5500:5500"
+    environment:
+      ORACLE_PASSWORD: password
+    volumes:
+      - oracle-data:/opt/oracle/oradata
+    healthcheck:
+      test: ["CMD-SHELL", "echo 'SELECT 1 FROM DUAL;' | sqlplus -s system/password@localhost/XEPDB1 | grep -q 1"]
+      interval: 30s
+      timeout: 20s
+      retries: 10
+      start_period: 120s
+    restart: always
+
+volumes:
+  sftp-data:
+  oracle-data:
