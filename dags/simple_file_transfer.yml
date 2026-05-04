@@ -1,0 +1,53 @@
+simple_file_transfer:
+  default_args:
+    owner: airflow
+    retries: 1
+
+  description: Transfer a CSV from SFTP and read it with a downstream task.
+  catchup: false
+  render_template_as_native_obj: true
+  start_date: 2025-01-01
+  schedule: null
+  tags:
+    - sftp
+    - dagfactory
+  tasks:
+    create_sftp_connection:
+      operator: airflow.providers.standard.operators.python.PythonOperator
+      python_callable: include.tasks.file_ingestion.upsert_sftp_connection
+      op_kwargs:
+        conn_id: sftp_default
+        host: sftp
+        port: 22
+        username: sftp
+        password: password
+        extra:
+          no_host_key_check: "true"
+
+    validate_sftp_connection:
+      operator: airflow.providers.standard.operators.python.PythonOperator
+      python_callable: include.tasks.file_ingestion.validate_sftp_connection
+      op_kwargs:
+        conn_id: sftp_default
+        remote_path: /upload/top_directors_data.csv
+      dependencies:
+        - create_sftp_connection
+
+    ingest_remote_file:
+      operator: airflow.providers.standard.operators.python.PythonOperator
+      python_callable: include.tasks.file_ingestion.ingest_sftp_file
+      op_kwargs:
+        conn_id: sftp_default
+        remote_path: /upload/top_directors_data.csv
+        local_directory: /tmp/pre_etl
+      dependencies:
+        - validate_sftp_connection
+
+    read_ingested_file:
+      operator: airflow.providers.standard.operators.python.PythonOperator
+      python_callable: include.tasks.file_ingestion.read_csv_file
+      op_kwargs:
+        local_path: "{{ ti.xcom_pull(task_ids='ingest_remote_file') }}"
+        preview_rows: 5
+      dependencies:
+        - ingest_remote_file
