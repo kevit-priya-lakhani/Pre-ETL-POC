@@ -1,0 +1,45 @@
+file:
+  remote_directory: /sftp/incoming/
+  name_pattern: "Account_{timestamp}_empty.txt"
+  timestamp_pattern: "%Y%m%d %H%M%S"
+  name_pattern_selection: latest
+
+format:
+  type: delimited
+  delimiter: "|"
+  enclosing_character: '"'
+  encoding: UTF-8
+  line_ending: "\n"
+  has_header: true
+  skip_rows: 0
+
+# min_record_threshold: 0 explicitly allows empty files (no rows beyond header).
+# This is the purpose of this test file.
+min_record_threshold: 0
+
+schema:
+  - name: RecordId
+    type: integer
+    not_null: true
+
+  - name: AccountNumber
+    type: string
+    not_null: true
+    max_length: 20
+
+  - name: ProductCode
+    type: string
+    allowed_values:
+      - CC
+      - ML
+      - UL
+      - VL
+
+  - name: OpenDate
+    type: date
+    date_format: "%Y%m%d"
+
+bad_records:
+  handling: move
+  threshold: 10
+  threshold_type: percentage

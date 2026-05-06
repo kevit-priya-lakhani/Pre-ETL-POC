@@ -1,0 +1,89 @@
+file:
+  remote_directory: /sftp/incoming/
+  name: Account.json                 
+
+format:
+  type: json                          
+  encoding: UTF-8
+
+min_record_threshold: 1
+
+schema:
+  - name: RecordId
+    source_name: "ID"
+    type: integer
+    not_null: true
+
+  - name: AccountNumber
+    source_name: "Account Key"
+    type: string
+    not_null: true
+    max_length: 20
+
+  - name: ProductCode
+    source_name: "Product Key"
+    type: string
+    allowed_values:
+      - CC
+      - ML
+      - UL
+      - VL
+
+  - name: OpenDate
+    source_name: "Contract Date"
+    type: date
+    date_format: "%Y%m%d"
+
+  - name: Currency
+    source_name: "Currency"
+    type: string
+    allowed_values:
+      - EUR
+      - USD
+
+  - name: DaysPastDue
+    source_name: "Delay Days"
+    type: integer
+    min: 0
+
+  - name: OriginalAmount
+    source_name: "Initial Capital"
+    type: integer
+    min: 0
+
+  - name: InstalmentAmount
+    source_name: "Overdue Capital*"
+    type: integer
+    min: 0
+
+  - name: OutstandingBalance
+    source_name: "Total outstanding"
+    type: integer
+    min: 0
+
+  - name: PrincipalBalance
+    source_name: "Total Balance"
+    type: integer
+    min: 0
+
+  - name: AccountStatus
+    source_name: "Account Status"
+    type: string
+    allowed_values:
+      - A
+      - W
+      - C
+
+  - name: AccountSubStatus
+    source_name: "CBS Account Status"
+    type: string
+
+  - name: MonthlyPayment
+    source_name: "Next Installment Amount"
+    type: integer
+    min: 0
+
+bad_records:
+  handling: move
+  threshold: 10
+  threshold_type: percentage

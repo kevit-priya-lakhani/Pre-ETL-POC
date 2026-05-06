@@ -1,0 +1,133 @@
+
+
+file:
+  remote_directory: /upload/
+  # name: directors_2024_01.csv                 # exact filename
+  name_pattern: "directors_{timestamp}.csv"     # OR Python re pattern (mutually exclusive with name), matches with all files in the remote_directory 
+  timestamp_pattern: "%Y%m%d_%H%M%S"            # supports python strftime patterns to extract timestamps from filenames when name_pattern is used; required if name_pattern includes a {timestamp} placeholder 
+  
+  
+ 
+  name_pattern_selection: latest           # latest | all (default: latest)   # reads only the file with the latest timestamp  OR all the files that match the name_pattern
+
+format:
+  type: delimited                        # delimited | fixed | json | xml
+
+  # ---- Delimited-only keys (ignored when type != delimited) ------
+  delimiter: ","                         # "," | "|" | "\t" | ";" — maps to read_csv(delim=)
+  enclosing_character: '"'              # quotechar for wrapped fields — maps to read_csv(quote=)
+                                         # set to null or omit to disable
+
+  # ---- Fixed-only keys (ignored when type != fixed) --------------
+  # (no additional top-level keys; column positions supplied per-field in schema via start/end)
+
+  # ---- JSON-only keys (ignored when type != json) ----------------
+  structure: array                       # array  → top-level element is a JSON array: [ { … }, … ]
+                                         # object → top-level element is a single JSON object (one record)
+                                         # lines  → newline-delimited JSON (one JSON object per line)
+
+  # ---- XML-only keys (ignored when type != xml) ------------------
+  root_element: accounts                 # name of the top-level XML wrapper element
+  record_element: record                 # name of the repeating XML element that represents one row
+
+  # ---- Shared keys (delimited + fixed) ---------------------------
+  encoding: UTF-8                        # UTF-8 — maps to read_csv(encoding=); UTF-16 | UTF-16-BOM | ANSI require pre-decoding to UTF-8 in Python before passing to DuckDB
+                                         # (encoding is also used for json/xml to specify the file's byte encoding before parsing)
+  line_ending: "\n"                      # "\n" (LF) | "\r\n" (CRLF) — maps to read_csv(new_line=); not applicable for json/xml
+  has_header: true                       # true → read_csv(header=true) | false → read_csv(header=false), column names taken from schema
+                                         # not applicable for json/xml (schema always provides field mapping)
+  
+  #---skip row count configured per file OR globally for all files---
+  skip_rows: 0                          #  rows to skip before the header/data — maps to read_csv(skip=); not applicable for json/xml
+  # OR
+  skip_rows_by_file:
+    - filename: "directors_2024_02.csv"         
+      skip_rows: 2                           
+    - filename: "directors_2024_03.csv"
+      skip_rows: 1
+
+  comment_prefix: "#"              # (optional) rows starting with this prefix are discarded
+                                         # no native DuckDB param — applied as post-read WHERE left(col, 1) != prefix
+                                         # not applicable for json/xml
+
+min_record_threshold: 1                        # (optional) minimum number of records required to avoid raising an exception for an empty file (default: 0, meaning empty files are allowed)
+
+
+filter_condition: "film_count > 0 AND genre IN ('Drama', 'Comedy')"
+
+# Optional structured filter configuration (alternative to filter_condition string)
+
+filters:
+  mode: "include"   # include OR exclude
+  conditions:
+    - column: "film_count"
+      operator: "greater_than"
+      value: 0
+ 
+    - column: "genre"
+      operator: "in"
+      value: ["Drama", "Comedy"]
+  combine: "AND"   # AND / OR
+
+
+# Schema
+#   • Required when has_header: false (provides column names + types)
+#   • For fixed-width files: also supply start+end OR width per column
+#   • For json/xml: use source_name to map the source key/element tag
+#     to the output column name (required when names differ or contain spaces)
+#
+# Supported types: string | integer | float | boolean | date | datetime
+# ------------------------------------------------------------------
+schema:
+  - name: director_name
+    type: string
+    source_name: "director name"         # (optional) source key/element name when it differs from name
+                                         # Required for json keys with spaces or xml tags that differ from output name
+                                         # Applies to type: json and type: xml only; ignored for delimited/fixed
+
+    # Fixed-width positioning 
+    #  Optional explicit byte range (1-based, inclusive):
+    #  start: 1
+    #  end: 50
+   
+
+    # Validation rules
+    not_null: true
+    min_length: 2
+    max_length: 100
+    regex: "^[A-Za-z .'-]+$"            # regexp_matches(col, pattern) in DuckDB
+
+  - name: film_count
+    type: integer
+    not_null: true
+    min: 0                               # inclusive lower bound
+    max: 9999                            # inclusive upper bound
+    unique: false                        # true → flag duplicate values in this column
+
+  - name: genre
+    type: string
+    allowed_values:                      # enum / lookup list; any value outside this list is a bad record
+      - Drama
+      - Comedy
+      - Action
+      - Thriller
+      - Documentary
+
+  - name: debut_date
+    type: date
+    date_format: "%Y-%m-%d"             # strftime format — maps to TRY_CAST(strptime(col, format) AS DATE)
+
+  - name: gross_revenue
+    type: float
+    min: 0.0
+
+bad_records:
+  handling: move                         # skip  → discard silently (filter with SQL WHERE <valid_conditions>)
+                                         # move  → COPY bad rows to bad_records_path via COPY ... TO (FORMAT CSV)
+                                         # fail  → raise AirflowException when threshold is breached
+  threshold: 10                          # numeric value (meaning depends on threshold_type)
+  threshold_type: percentage             # percentage | count
+                                         # percentage: fail if bad% > threshold
+                                         # count:      fail if bad row count > threshold
+
+

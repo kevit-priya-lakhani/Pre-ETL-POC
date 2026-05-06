@@ -1,0 +1,41 @@
+file:
+  remote_directory: /sftp/incoming/
+  name_pattern: "Account_{timestamp}_mixed_record_types.txt"
+  timestamp_pattern: "%Y%m%d %H%M%S"
+  name_pattern_selection: latest
+
+format:
+  type: delimited
+  delimiter: "|"
+  encoding: UTF-8
+  line_ending: "\n"
+  has_header: true
+  skip_rows: 0
+  comment_prefix: "#"
+
+min_record_threshold: 1
+
+filter_condition: "record_type = 'ACC'"
+
+schema:
+  - name: record_type
+    type: string
+    allowed_values:
+      - ACC
+      - PAY
+      - TRL
+
+  - name: record_id
+    type: integer
+    not_null: true
+
+  # col 3 — header names this "payload_or_fields"; represents AccountNumber for ACC rows
+  - name: payload_or_fields
+    type: string              # AccountNumber
+    not_null: true
+    max_length: 20
+
+bad_records:
+  handling: move
+  threshold: 10
+  threshold_type: percentage

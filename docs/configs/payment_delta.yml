@@ -1,0 +1,65 @@
+file:
+  remote_directory: /sftp/incoming/
+  name_pattern: "Payment_{timestamp}.txt"
+  timestamp_pattern: "%Y%m%d_%H%M%S"   
+  name_pattern_selection: all           
+
+format:
+  type: delimited
+  delimiter: "|"
+  encoding: UTF-8
+  line_ending: "\n"
+  has_header: false                    
+  skip_rows: 0
+
+min_record_threshold: 1
+
+
+schema:
+  - name: seq_num
+    type: integer
+    not_null: true
+    min: 1
+
+  - name: payment_key
+    type: string
+    not_null: true
+    max_length: 30
+
+  - name: account_number
+    type: string
+    not_null: true
+    max_length: 20
+
+  # col 4 — reserved/empty column, 
+  - name: col_4
+    type: string
+
+  - name: amount
+    type: float
+    min: 0.0
+
+  # cols 6–8 — reserved zero columns,
+  - name: col_6
+    type: string
+  - name: col_7
+    type: string
+  - name: col_8
+    type: string
+
+  - name: transaction_date
+    type: date
+    date_format: "%Y%m%d"
+    not_null: true
+
+  - name: value_date
+    type: date
+    date_format: "%Y%m%d"
+    not_null: true
+
+  # cols 11–21 — empty reserved columns, 
+
+bad_records:
+  handling: move
+  threshold: 10
+  threshold_type: percentage

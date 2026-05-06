@@ -1,0 +1,71 @@
+file:
+  remote_directory: /sftp/incoming/
+  name_pattern: "Account_{timestamp}_fixed_length_utf8.txt"
+  timestamp_pattern: "%Y%m%d %H%M%S"
+  name_pattern_selection: latest
+
+format:
+  type: fixed
+  encoding: UTF-8
+  line_ending: "\n"
+  has_header: true
+  skip_rows: 1                         
+  comment_prefix: "#"                  
+
+min_record_threshold: 1
+
+
+schema:
+  - name: RecordId
+    type: integer
+    not_null: true
+    start: 1
+    end: 10
+
+  - name: AccountNumber
+    type: string
+    not_null: true
+    max_length: 20
+    start: 11
+    end: 25
+
+  - name: ProductCode
+    type: string
+    allowed_values:
+      - CC
+      - ML
+      - UL
+      - VL
+    start: 26
+    end: 35
+
+  - name: OpenDate
+    type: date
+    date_format: "%Y%m%d"
+    start: 36
+    end: 47
+
+  - name: Currency
+    type: string
+    allowed_values:
+      - EUR
+      - USD
+    start: 48
+    end: 52
+
+  - name: DaysPastDue
+    type: integer
+    min: 0
+    start: 53
+    end: 64
+
+  - name: Amount
+    type: integer
+    min: 0
+    start: 65
+    end: 76
+
+bad_records:
+  handling: move
+  threshold: 10
+  threshold_type: percentage

@@ -1,0 +1,91 @@
+file:
+  remote_directory: /sftp/incoming/
+  name_pattern: "Account_{timestamp}_RFP_FileReadingTest.txt"
+  timestamp_pattern: "%Y%m%d %H%M%S"
+  name_pattern_selection: latest
+
+format:
+  type: delimited
+  delimiter: "|"
+  enclosing_character: '"'
+  encoding: UTF-8-BOM                  
+  line_ending: "\n"                   
+  skip_rows: 2                          
+  comment_prefix: "#"                   
+
+min_record_threshold: 1
+
+
+schema:
+  - name: RecordId
+    type: integer
+    not_null: true
+
+  - name: AccountNumber
+    type: string
+    not_null: true
+    max_length: 20
+
+  - name: ProductCode
+    type: string
+    allowed_values:
+      - CC
+      - ML
+      - UL
+      - VL
+
+  - name: OpenDate
+    type: date
+    # Multiple date formats in test data (20170315, 2016-11-01, 05/01/2020, invalid 2021-99-99).
+    # Non-conforming rows treated as bad records.
+    date_format: "%Y%m%d"
+
+  - name: Currency
+    type: string
+    allowed_values:
+      - EUR
+      - USD
+
+  - name: DaysPastDue
+    type: integer
+    min: 0
+
+  - name: ArrearsDays
+    type: integer
+    min: 0
+
+  - name: OriginalAmount
+    type: integer
+    min: 0
+
+  - name: InstalmentAmount
+    type: integer
+    min: 0
+
+  - name: OutstandingBalance
+    type: integer
+    min: 0
+
+  - name: PrincipalBalance
+    type: integer
+    min: 0
+
+  - name: AccountStatus
+    type: string
+    not_null: true
+    allowed_values:
+      - A
+      - W
+      - C
+
+  - name: AccountSubStatus
+    type: string
+
+  - name: MonthlyPayment
+    type: integer
+    min: 0
+
+bad_records:
+  handling: move
+  threshold: 10
+  threshold_type: percentage

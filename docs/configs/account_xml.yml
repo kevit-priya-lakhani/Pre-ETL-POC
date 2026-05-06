@@ -1,0 +1,90 @@
+file:
+  remote_directory: /sftp/incoming/
+  name: Account.xml                    
+
+format:
+  type: xml                            
+  encoding: UTF-8
+  root_element: accounts               # top-level XML element
+  record_element: record               # repeating element representing one row
+
+min_record_threshold: 1
+
+
+# Schema — XML element names use underscores (spaces replaced).
+# source_name maps the XML element tag to the output column name.
+
+schema:
+  - name: RecordId
+    source_name: ID
+    type: integer
+    not_null: true
+
+  - name: AccountNumber
+    source_name: Account_Key
+    type: string
+    not_null: true
+    max_length: 20
+
+  - name: ProductCode
+    source_name: Product_Key
+    type: string
+    allowed_values:
+      - CC
+      - ML
+      - UL
+      - VL
+
+  - name: OpenDate
+    source_name: Contract_Date
+    type: date
+    date_format: "%Y%m%d"
+
+  - name: Currency
+    source_name: Currency
+    type: string
+    allowed_values:
+      - EUR
+      - USD
+
+  - name: DaysPastDue
+    source_name: Delay_Days
+    type: integer
+    min: 0
+
+  - name: OriginalAmount
+    source_name: Initial_Capital
+    type: integer
+    min: 0
+
+  - name: OutstandingBalance
+    source_name: Total_outstanding
+    type: integer
+    min: 0
+
+  - name: PrincipalBalance
+    source_name: Total_Balance
+    type: integer
+    min: 0
+
+  - name: AccountStatus
+    source_name: Account_Status
+    type: string
+    allowed_values:
+      - A
+      - W
+      - C
+
+  - name: AccountSubStatus
+    source_name: CBS_Account_Status
+    type: string
+
+  - name: MonthlyPayment
+    source_name: Next_Installment_Amount
+    type: integer
+    min: 0
+
+bad_records:
+  handling: move
+  threshold: 10
+  threshold_type: percentage
