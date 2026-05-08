@@ -38,6 +38,32 @@ file:
 | `%Y%m%d %H%M%S` | `20251219 103000` |
 | `%Y-%m-%d` | `2026-04-10` |
 
+### Inline regex placeholders in `name_pattern`
+
+Beyond `{timestamp}`, any other `{...}` block in `name_pattern` is treated as a raw regex fragment. This lets you match variable segments — such as a randomly generated GUID or numeric ID — that appear between the fixed parts of a filename.
+
+**Syntax:** `{<regex>}` where `<regex>` is any valid Python regular expression. Regex quantifiers that themselves contain braces (e.g. `\d{8}`) are supported via brace-depth tracking.
+
+**Examples:**
+
+Match a randomly generated numeric run ID between the timestamp and a fixed suffix:
+
+```yaml
+# Matches: Account_20260411_090000_4377328_FileReadingTest.txt
+name_pattern: "Account_{timestamp}_{\d+}_FileReadingTest.txt"
+timestamp_pattern: "%Y%m%d_%H%M%S"
+```
+
+Match a standard UUID (GUID) between the timestamp and a fixed suffix:
+
+```yaml
+# Matches: Account_20260411_090000_f358cb03-7d2d-4bd3-a6b9-2d804c871f20_FileReadingTest.txt
+name_pattern: "Account_{timestamp}_{[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}}_FileReadingTest.txt"
+timestamp_pattern: "%Y%m%d_%H%M%S"
+```
+
+> **Note:** The pattern value must be a raw string (or the backslashes must be escaped) so that sequences like `\d` are passed through literally to the regex engine.
+
 ---
 
 ## `format`
@@ -56,9 +82,19 @@ format:
   has_header: true
   skip_rows: 0             # rows to skip before header/data
   comment_prefix: "#"      # rows starting with this are discarded
+  select_by_index: false   # false (default) | true — see below
 ```
 
 > **Encoding note:** `UTF-16`, `UTF-16-BOM`, and `ANSI` must be pre-decoded to UTF-8 in Python before passing to DuckDB.
+
+**`select_by_index`** controls whether the schema acts as a full column manifest or a selective column picker:
+
+| Value | Behaviour |
+|-------|-----------|
+| `false` (default) | Schema must define **all** columns present in the file. Columns are matched by declaration order . |
+| `true` | Only the columns listed in the schema are extracted; all other columns in the file are discarded. Each schema field **must** supply a `column_index` (1-based) to identify its position in the source file. |
+
+Use `select_by_index: true` when you need a subset of a wide file and do not want to enumerate every column in the schema.
 
 **`skip_rows_by_file`** — use instead of `skip_rows` when different files need different counts:
 
@@ -148,6 +184,11 @@ schema:
     source_name: "Contract Date"  # JSON key or XML tag — only needed when it differs from name
     date_format: "%Y%m%d"    # required for date/datetime fields
 
+    # Index-based column selection (delimited only)
+    column_index: 3          # 1-based column position in the source file
+                             # Required per field when format.select_by_index: true
+                             # Ignored when format.select_by_index: false (default)
+
     # Fixed-width only
     start: 1                 # 1-based, inclusive
     end: 10
@@ -161,6 +202,27 @@ schema:
     max: 9999                # integer / float
     unique: true             # flag duplicate values
     allowed_values: [A, B, C]  # enum — values outside list are bad records
+```
+
+**Index-based column selection example** — extract only columns 1, 3, and 7 from a 10-column file:
+
+```yaml
+format:
+  type: delimited
+  delimiter: ","
+  select_by_index: true
+
+schema:
+  - name: account_id
+    type: string
+    column_index: 1
+  - name: open_date
+    type: date
+    column_index: 3
+    date_format: "%Y%m%d"
+  - name: balance
+    type: float
+    column_index: 7
 ```
 
 **`date_format`** common patterns:
@@ -179,14 +241,13 @@ Any row that fails type casting or a validation rule is a bad record.
 
 ```yaml
 bad_records:
-  handling: move          # skip | move | fail
+  handling: move          #  move | fail
   threshold: 10
   threshold_type: percentage   # percentage | count
 ```
 
 | `handling` | Behaviour |
 |------------|-----------|
-| `skip` | Discard silently |
 | `move` | Copy to a separate bad-records CSV |
 | `fail` | Raise `AirflowException` when threshold is breached |
 
@@ -205,6 +266,7 @@ bad_records:
 | `file.name` / `name_pattern` | yes (one) | all | — |
 | `file.timestamp_pattern` | if `{timestamp}` in pattern | all | — |
 | `file.name_pattern_selection` | no | all | `latest` |
+| `name_pattern` inline regex `{<regex>}` | no | all | — |
 | `format.type` | yes | all | — |
 | `format.delimiter` | yes | delimited | — |
 | `format.enclosing_character` | no | delimited | none |
@@ -216,11 +278,13 @@ bad_records:
 | `format.has_header` | no | delimited, fixed | `true` |
 | `format.skip_rows` | no | delimited, fixed | `0` |
 | `format.comment_prefix` | no | delimited, fixed | none |
+| `format.select_by_index` | no | delimited | `false` |
 | `min_record_threshold` | no | all | `0` |
 | `filter_condition` | no | all | none |
 | `schema[].name` | yes | all | — |
 | `schema[].type` | yes | all | — |
 | `schema[].source_name` | no | json, xml | — |
+| `schema[].column_index` | if `select_by_index: true` | delimited | — |
 | `schema[].start` + `end` | yes | fixed | — |
 | `schema[].date_format` | yes | date/datetime | — |
 | `bad_records.handling` | yes | all | — |

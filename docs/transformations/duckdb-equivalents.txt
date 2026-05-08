@@ -1,0 +1,45 @@
+trim: TRIM(col) / LTRIM(col) / RTRIM(col)
+
+type cast: `TRY_CAST(col AS <type>)`
+
+round: `ROUND(col, N)`
+
+date_conversion: `TRY_CAST(strptime(col, format) AS DATE)` applied for each format in sequence.
+
+case_conversion: `UPPER(col)` / `LOWER(col)`
+
+remove_non_printable: `regexp_replace(col, '[^\x20-\x7E]', '', 'g')`
+
+substring: `SUBSTRING(col, start, length)`
+
+substring_pattern: `regexp_extract(col, pattern, 1)`
+
+null_handling: `COALESCE(col, replace_with)`
+
+
+New colummns:
+
+fixed values:
+`SELECT 'value' AS column_name`
+
+expressions:
+`SELECT <expression> AS column_name`
+> Use `NULLIF(denominator, 0)` to guard against division-by-zero errors.
+
+arithmetic operations:
+DuckDB: `SELECT gross_revenue * 1.05 AS adjusted_revenue`
+
+concat:
+DuckDB: `concat_ws(' — ', director_name, debut_date, '(director)')`
+> `NULL` parts are silently skipped by `concat_ws`.
+
+conditional
+
+DuckDB: `CASE WHEN … THEN … ELSE … END`
+> `when` expressions are full DuckDB SQL predicates and can reference any existing column.
+
+uuid
+DuckDB: `gen_random_uuid()`
+
+date_function
+DuckDB: `YEAR(debut_date)` / `MONTH(…)` / `DAY(…)`

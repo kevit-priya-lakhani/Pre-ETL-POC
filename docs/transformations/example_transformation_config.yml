@@ -1,0 +1,213 @@
+# Transformation stage configuration
+# Applied after ingestion; operations are executed column-by-column in the order listed.
+# All expressions map to DuckDB SQL unless noted otherwise.
+source: example_ingestion_config.yml   # (optional) reference to the ingestion config; used for validation and to resolve source_name mappings in the schema
+
+columns:
+  # ──────────────────────────────────────────────────────────────
+  # director_name  (string)
+  # ──────────────────────────────────────────────────────────────
+  - name: director_name
+    transformations:
+      # Trimming — strips leading/trailing whitespace
+      # DuckDB: TRIM(director_name)
+      - type: trim
+        side: both                          # both | left | right
+
+      # Non-printable character removal — replaces control characters with ""
+      # DuckDB: regexp_replace(col, '[^\x20-\x7E]', '', 'g')
+      - type: remove_non_printable
+
+      # Type casting — explicit cast to the target SQL type
+      # DuckDB: TRY_CAST(col AS VARCHAR)
+      - type: cast
+        to: string
+
+  # ──────────────────────────────────────────────────────────────
+  # film_count  (integer)
+  # ──────────────────────────────────────────────────────────────
+  - name: film_count
+    transformations:
+      - type: cast
+        to: integer                         # string | integer | float | boolean | date | datetime
+
+      # Rounding — rounds a numeric value to N decimal places
+      # DuckDB: ROUND(col, 0)  (for integers, 0 decimals)
+      - type: round
+        decimal_places: 0
+
+  # ──────────────────────────────────────────────────────────────
+  # gross_revenue  (float)
+  # ──────────────────────────────────────────────────────────────
+  - name: gross_revenue
+    transformations:
+      - type: cast
+        to: float
+
+      - type: round
+        decimal_places: 2
+
+  # ──────────────────────────────────────────────────────────────
+  # debut_date  (date)
+  # ──────────────────────────────────────────────────────────────
+  - name: debut_date
+    transformations:
+      # Date conversion — parses one or more source formats and outputs a canonical format
+      # DuckDB: TRY_CAST(strptime(col, source_formats[0]) AS DATE)
+      #         Falls through source_formats list until one succeeds.
+      - type: date_conversion
+        source_formats:                     # try each format in order; first non-null result wins
+          - "%d/%m/%Y"
+          - "%m-%d-%Y"
+          - "%Y%m%d"
+        target_format: "%Y-%m-%d"           # ISO 8601 output format
+
+  # ──────────────────────────────────────────────────────────────
+  # bio  (string)  — substring extraction examples
+  # ──────────────────────────────────────────────────────────────
+  - name: bio
+    transformations:
+      - type: trim
+        side: both
+
+      # Substring by position — extracts characters starting at `start` for `length` chars
+      # DuckDB: SUBSTRING(col, start, length)
+      - type: substring
+        mode: position                      # position | pattern
+        start: 1                            # 1-based index
+        length: 200
+
+      # Substring by pattern — extracts first match of a regex group
+      # DuckDB: regexp_extract(col, pattern, 1)
+      # - type: substring
+      #   mode: pattern
+      #   pattern: "^([^.]+)\."             # capture group 1 = text before first period
+
+  # ──────────────────────────────────────────────────────────────
+  # genre  (string)  — case conversion + null replace example
+  # ──────────────────────────────────────────────────────────────
+  - name: genre
+    transformations:
+      # Upper/lower case conversion
+      # DuckDB: UPPER(col) | LOWER(col)
+      - type: case_conversion
+        to: upper                           # upper | lower
+
+      # Null value handling — replace nulls with a default value
+      # DuckDB: COALESCE(col, 'UNKNOWN')
+      - type: null_handling
+        strategy: replace                   # replace | drop_row
+        replace_with: "UNKNOWN"             # used when strategy is replace; must match column type
+                                            # omit when strategy is drop_row
+
+  # ──────────────────────────────────────────────────────────────
+  # notes  (string)  — null drop_row example
+  # ──────────────────────────────────────────────────────────────
+  - name: notes
+    transformations:
+      # Null value handling — drop rows where this column is null
+      # Applied as a post-read filter: WHERE notes IS NOT NULL
+      - type: null_handling
+        strategy: drop_row
+
+
+# ──────────────────────────────────────────────────────────────
+# new_columns — derived / computed columns added to the output
+# ──────────────────────────────────────────────────────────────
+new_columns:
+
+  # Fixed value — constant for every row
+  # DuckDB: SELECT 'DIRECTORS' AS source_system
+  - name: source_system
+    type: string
+    value: fixed                            # fixed | expression | conditional | concat | arithmetic | uuid
+    fixed_value: "DIRECTORS"
+
+  # Expression — raw DuckDB SQL referencing existing columns
+  # DuckDB: SELECT <expression> AS col_name
+  - name: revenue_per_film
+    type: float
+    value: expression
+    expression: "ROUND(gross_revenue / NULLIF(film_count, 0), 2)"
+
+  # Concatenation — joins multiple columns (or literals) with a separator
+  # DuckDB: concat_ws(separator, part1, part2, ...)
+  - name: display_label
+    type: string
+    value: concat
+    separator: " — "
+    parts:
+      - column: director_name
+      - column: debut_date
+      - literal: "(director)"
+
+  # Arithmetic — combines columns and literals with standard operators
+  # DuckDB: (col_a + col_b) * literal  etc.
+  - name: adjusted_revenue
+    type: float
+    value: arithmetic
+    expression: "gross_revenue * 1.05"      # shorthand; same as value: expression for simple math
+
+  # Conditional (if-else) — produces a value based on a DuckDB CASE WHEN expression
+  # DuckDB: CASE WHEN <when> THEN <then> [WHEN ...] ELSE <else> END
+  - name: tier
+    type: string
+    value: conditional
+    cases:
+      - when: "film_count >= 20"
+        then: "Prolific"
+      - when: "film_count >= 10"
+        then: "Active"
+      - when: "film_count >= 1"
+        then: "Emerging"
+    else: "Unknown"
+
+  # Auto-generated UUID key — unique per row
+  # DuckDB: gen_random_uuid()
+  - name: record_id
+    type: string
+    value: uuid
+
+  # Load timestamp — current timestamp at pipeline execution time
+  # DuckDB: NOW()
+  - name: ingested_at
+    type: datetime
+    value: expression
+    expression: "NOW()"
+
+  # Date function — extract a date component or perform date arithmetic
+  # ---- Component extraction ----
+  # DuckDB: YEAR(debut_date)
+  - name: debut_year
+    type: integer
+    value: date_function
+    function: year                          # year | month | day
+    source_column: debut_date
+
+  # DuckDB: MONTH(debut_date)
+  - name: debut_month
+    type: integer
+    value: date_function
+    function: month
+    source_column: debut_date
+
+  # ---- Date arithmetic: add an interval to a date column ----
+  # DuckDB: debut_date + INTERVAL 5 YEAR
+  - name: contract_end_date
+    type: date
+    value: date_function
+    function: date_add
+    source_column: debut_date
+    interval: 5
+    unit: year                              # year | month | day
+
+  # ---- Date difference between two columns ----
+  # DuckDB: DATE_DIFF('year', debut_date, retirement_date)
+  - name: years_active
+    type: integer
+    value: date_function
+    function: date_diff
+    unit: year                              # year | month | day
+    start_column: debut_date
+    end_column: retirement_date
+    # end_value: "CURRENT_DATE"             # alternatively, use a DuckDB expression as the end point

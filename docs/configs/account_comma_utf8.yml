@@ -8,28 +8,34 @@ file:
 format:
   type: delimited
   delimiter: ","
-  enclosing_character: '"'              
+  enclosing_character: '"'
   encoding: UTF-8
   line_ending: "\n"
   has_header: true
   skip_rows: 0
-  comment_prefix: "#"                  
+  comment_prefix: "#"
+  select_by_index: true   # only extract the 4 schema columns; remaining 8 (COL004-COL012) are discarded
 
 min_record_threshold: 1
 
 
+# CSV column layout (1-based):
+#  1=RecordId  2=AccountNumber  3=ProductCode  4-7=COL004-COL007  8=OpenDate  9-12=COL009-COL012
 schema:
   - name: RecordId
     type: integer
+    column_index: 1
     not_null: true
 
   - name: AccountNumber
     type: string
+    column_index: 2
     not_null: true
     max_length: 20
 
   - name: ProductCode
     type: string
+    column_index: 3
     allowed_values:
       - CC
       - ML
@@ -38,6 +44,7 @@ schema:
 
   - name: OpenDate
     type: date
+    column_index: 8
     # Multiple date formats present in test data (20170315, 2016-11-01, 05/01/2020).
     # Rows with non-conforming formats will be treated as bad records.
     date_format: "%Y%m%d"
