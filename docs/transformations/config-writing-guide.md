@@ -2,12 +2,12 @@
 
 > Blueprint: [`example_transformation_config.yml`](example_transformation_config.yml)
 
-A transformation config has two top-level keys, both optional but typically present together.
+A transformation config has the following top-level keys.
 
 ```yaml
-source: <ingestion_config.yml>   # (optional) reference to the ingestion config; used for validation and to resolve source_name mappings in the schema
-columns:      # (optional) per-column transformations applied to existing columns
-new_columns:  # (optional) derived/computed columns appended to the output
+source: <ingestion_config.yml>   # (required) reference to the ingestion config; used for validation and to resolve source_name mappings in the schema
+columns: ~                       # (optional) per-column transformations applied to existing columns; ~ means no transformations
+new_columns: ~                   # (optional) derived/computed columns appended to the output; ~ means no new columns
 ```
 
 Transformations inside `columns` are executed **in the order listed**. All expressions compile to DuckDB SQL.
@@ -15,9 +15,9 @@ Transformations inside `columns` are executed **in the order listed**. All expre
 ---
 
 ## `source`
-A reference to the ingestion config that produced the input data. Used for validation and to resolve `source_name` references in the `schema` (if present).
+**Required.** A reference to the ingestion config that produced the input data. Used for validation and to resolve `source_name` references in the `schema` (if present).
 
-
+---
 
 ## `columns`
 
@@ -125,17 +125,24 @@ Converts string values to upper or lower case.
 
 Strips or replaces non-printable control characters (outside the ASCII printable range `0x20–0x7E`).
 
+**Remove non-printable characters (default — replace with empty string):**
 ```yaml
 - type: remove_non_printable
 ```
 
-> No additional keys. Always replaces matched characters with an empty string.
+**Replace non-printable characters with a fixed value:**
+```yaml
+- type: remove_non_printable
+  replace_with: " "    # optional; omit to remove (replace with "")
+```
+
+> `replace_with` is optional. When omitted, matched characters are removed (replaced with `""`).
 
 ---
 
 ### `type: null_handling`
 
-Controls what happens when a column value is `NULL` (or becomes `NULL` after a failed `cast`).
+Controls what happens when a column value is `NULL` (or becomes `NULL` after a failed `cast`). Optionally also treats empty strings and whitespace-only strings the same as `NULL` by setting `include_empty: true`.
 
 **Replace with a default value:**
 ```yaml
@@ -143,12 +150,28 @@ Controls what happens when a column value is `NULL` (or becomes `NULL` after a f
   strategy: replace
   replace_with: "UNKNOWN"   # must match the column type
 ```
+
+**Also treat empty / whitespace-only strings as null (replace):**
+```yaml
+- type: null_handling
+  strategy: replace
+  replace_with: "UNKNOWN"
+  include_empty: true        # optional; default false — also catches '' and '   '
+```
+
+
 **Drop the entire row if the column is null:**
 ```yaml
 - type: null_handling
   strategy: drop_row
 ```
-Applied as a post-read filter: `WHERE col IS NOT NULL`
+
+**Also drop rows where the column is empty / whitespace-only:**
+```yaml
+- type: null_handling
+  strategy: drop_row
+  include_empty: true        # optional; default false
+```
 
 ---
 
@@ -244,6 +267,20 @@ Produces a value based on a `CASE WHEN` expression. Cases are evaluated top-to-b
 
 ---
 
+### Combining transformations inline
+
+When a new column's value depends on functions applied to an existing column, you can embed DuckDB functions directly inside a `value: expression` or `value: conditional` expression rather than adding a separate `columns` entry.
+
+**Example — `TRY_CAST(TRIM(…))` + conditional logic referencing `column1` and `column2`:**
+```yaml
+- name: derived_value
+  type: string
+  value: expression
+  expression: "CASE WHEN TRY_CAST(TRIM(column1) AS INTEGER) > 5 THEN '0' ELSE column2 END"
+```
+
+---
+
 ### `value: uuid`
 
 Generates a unique random UUID for every row.
@@ -261,41 +298,24 @@ Generates a unique random UUID for every row.
 
 Extracts a date component or performs date arithmetic.
 
-**Extract year / month / day:**
+**Extract year / month / day / day_of_week:**
 ```yaml
 - name: debut_year
   type: integer
   value: date_function
-  function: year             # year | month | day
+  function: year             # year | month | day | day_of_week
   source_column: debut_date
 ```
 
-**Add an interval to a date column:**
+**Day of week (1 = Sunday … 7 = Saturday):**
 ```yaml
-- name: contract_end_date
-  type: date
-  value: date_function
-  function: date_add
-  source_column: debut_date
-  interval: 5
-  unit: year                 # year | month | day
-```
-
-DuckDB: `debut_date + INTERVAL 5 YEAR`
-
-**Difference between two date columns:**
-```yaml
-- name: years_active
+- name: debut_day_of_week
   type: integer
   value: date_function
-  function: date_diff
-  unit: year                 # year | month | day
-  start_column: debut_date
-  end_column: retirement_date
-  # end_value: "CURRENT_DATE"   # use a DuckDB expression instead of end_column
+  function: day_of_week
+  source_column: debut_date
 ```
 
-DuckDB: `DATE_DIFF('year', debut_date, retirement_date)`
 
 ---
 
@@ -312,9 +332,9 @@ DuckDB: `DATE_DIFF('year', debut_date, retirement_date)`
 | `substring` | `mode: position` → `start`, `length` | `SUBSTRING(col, start, length)` |
 | `substring` | `mode: pattern` → `pattern` | `regexp_extract(col, pattern, 1)` |
 | `case_conversion` | `to: upper\|lower` | `UPPER` / `LOWER` |
-| `remove_non_printable` | _(none)_ | `regexp_replace(col, '[^\x20-\x7E]', '', 'g')` |
-| `null_handling` | `strategy: replace` → `replace_with` | `COALESCE(col, default)` |
-| `null_handling` | `strategy: drop_row` | `WHERE col IS NOT NULL` |
+| `remove_non_printable` | `replace_with` (optional, default `""`) | `regexp_replace(col, '[^\x20-\x7E]', replace_with, 'g')` |
+| `null_handling` | `strategy: replace` → `replace_with`, `include_empty` (opt) | `COALESCE(col, default)` / `COALESCE(NULLIF(TRIM(col), ''), default)` |
+| `null_handling` | `strategy: drop_row`, `include_empty` (opt) | `WHERE col IS NOT NULL` / `WHERE col IS NOT NULL AND TRIM(col) <> ''` |
 
 ### New column strategies
 
@@ -326,6 +346,4 @@ DuckDB: `DATE_DIFF('year', debut_date, retirement_date)`
 | `concat` | `separator`, `parts[]` | `concat_ws(sep, …)` |
 | `conditional` | `cases[]` (`when`/`then`), `else` | `CASE WHEN … END` |
 | `uuid` | _(none)_ | `gen_random_uuid()` |
-| `date_function` `year\|month\|day` | `function`, `source_column` | `YEAR()` / `MONTH()` / `DAY()` |
-| `date_function` `date_add` | `source_column`, `interval`, `unit` | `col + INTERVAL N UNIT` |
-| `date_function` `date_diff` | `start_column`, `end_column` (or `end_value`), `unit` | `DATE_DIFF('unit', start, end)` |
+| `date_function` `year\|month\|day\|day_of_week` | `function`, `source_column` | `YEAR()` / `MONTH()` / `DAY()` / `DAYOFWEEK()` |

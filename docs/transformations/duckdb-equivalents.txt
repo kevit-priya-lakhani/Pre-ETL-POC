@@ -17,6 +17,17 @@ substring_pattern: `regexp_extract(col, pattern, 1)`
 null_handling: `COALESCE(col, replace_with)`
 
 
+
+DuckDB: `COALESCE(NULLIF(TRIM(col), ''), 'UNKNOWN')`
+
+
+DuckDB: `WHERE col IS NOT NULL AND TRIM(col) <> ''`
+
+> `include_empty` is optional (default `false`). When `true`, `TRIM(col)` is applied before the null check so that strings containing only spaces are treated identically to `NULL`.
+
+
+
+
 New colummns:
 
 fixed values:
@@ -43,3 +54,9 @@ DuckDB: `gen_random_uuid()`
 
 date_function
 DuckDB: `YEAR(debut_date)` / `MONTH(…)` / `DAY(…)`
+DuckDB: `DAYOFWEEK(debut_date)`
+
+DuckDB: `CASE WHEN TRY_CAST(TRIM(column1) AS INTEGER) > 5 THEN '0' ELSE column2 END`
+
+> Use inline DuckDB function calls inside `expression` to avoid needing an extra `columns` entry when the combined logic is only required for the derived column.
+

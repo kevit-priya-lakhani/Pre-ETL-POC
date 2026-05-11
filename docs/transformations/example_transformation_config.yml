@@ -191,23 +191,4 @@ new_columns:
     function: month
     source_column: debut_date
 
-  # ---- Date arithmetic: add an interval to a date column ----
-  # DuckDB: debut_date + INTERVAL 5 YEAR
-  - name: contract_end_date
-    type: date
-    value: date_function
-    function: date_add
-    source_column: debut_date
-    interval: 5
-    unit: year                              # year | month | day
-
-  # ---- Date difference between two columns ----
-  # DuckDB: DATE_DIFF('year', debut_date, retirement_date)
-  - name: years_active
-    type: integer
-    value: date_function
-    function: date_diff
-    unit: year                              # year | month | day
-    start_column: debut_date
-    end_column: retirement_date
-    # end_value: "CURRENT_DATE"             # alternatively, use a DuckDB expression as the end point
+ 

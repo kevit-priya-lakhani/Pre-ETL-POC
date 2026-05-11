@@ -11,6 +11,9 @@ min_record_threshold:  # (optional) guard against unexpectedly empty files
 filter_condition:      # (optional) SQL row filter applied after reading
 schema:                # (optional*) column names, types, and validation
 bad_records:           # what to do when a row fails validation
+save_for_later_use: false        # (optional) when true, the  output is persisted for reuse in downstream configs
+
+
 ```
 
 ---
@@ -81,7 +84,7 @@ format:
   line_ending: "\n"        # "\n" | "\r\n"
   has_header: true
   skip_rows: 0             # rows to skip before header/data
-  comment_prefix: "#"      # rows starting with this are discarded
+  comment_prefix: ["#",'//']      # rows starting with this are discarded
   select_by_index: false   # false (default) | true — see below
 ```
 
@@ -173,6 +176,54 @@ A DuckDB SQL `WHERE` clause applied **after** type casting. Only matching rows c
 
 ---
 
+## `filters`
+
+A structured, no-SQL alternative to `filter_condition`. Use one or the other — not both.
+
+```yaml
+filters:
+  mode: include          # include → keep matching rows | exclude → drop matching rows
+  combine: AND           # AND | OR — how multiple conditions are joined
+  conditions:
+    - column: record_type
+      operator: in
+      value: [ACC, PAY]
+
+    - column: amount
+      operator: greater_than
+      value: 0
+```
+
+**`mode`**
+- `include` — only rows that match **all/any** conditions (per `combine`) are kept
+- `exclude` — rows that match are dropped
+
+**`combine`** — `AND` requires every condition to match; `OR` requires at least one.
+
+### Supported operators
+
+| Operator | `value` | Example |
+|----------|---------|---------|
+| `equals` / `not_equals` | scalar | `value: "ACC"` |
+| `greater_than` / `less_than` | number | `value: 100` |
+| `greater_than_or_equal` / `less_than_or_equal` | number | `value: 0` |
+| `contains` / `starts_with` / `ends_with` | string | `value: "PK"` |
+| `in` / `not_in` | list | `value: ["ACC", "PAY"]` |
+| `between` | two-element list `[min, max]` | `value: [0, 1000]` |
+| `is_null` / `is_not_null` | *(omit value)* | — |
+
+### Example — mixed-record-type file, keep only ACC rows
+
+```yaml
+filters:
+  mode: include
+  combine: AND
+  conditions:
+    - column: record_type
+      operator: equals
+      value: "ACC"
+```
+
 ## `schema`
 
 A list of column definitions. **Required when** `has_header: false`, `type: fixed`, or `type: json`/`xml`. Optional for delimited files with a header (use to add casting or validation).
@@ -241,14 +292,14 @@ Any row that fails type casting or a validation rule is a bad record.
 
 ```yaml
 bad_records:
-  handling: move          #  move | fail
+  handling: continue          #  continue  | fail
   threshold: 10
   threshold_type: percentage   # percentage | count
 ```
 
 | `handling` | Behaviour |
 |------------|-----------|
-| `move` | Copy to a separate bad-records CSV |
+| `continue` | Copy to a separate bad-records CSV |
 | `fail` | Raise `AirflowException` when threshold is breached |
 
 | `threshold_type` | Triggers when… |
@@ -256,7 +307,18 @@ bad_records:
 | `percentage` | bad rows > N % of total |
 | `count` | bad row count > N |
 
+
+## `save_for_later_use`
+
+An optional boolean flag (default: `false`). When set to `true`, the transformed output is persisted as an intermediate dataset that downstream transformation configs can reference and reuse.
+
+```yaml
+save_for_later_use: true
+```
 ---
+
+
+
 
 ## Quick reference
 

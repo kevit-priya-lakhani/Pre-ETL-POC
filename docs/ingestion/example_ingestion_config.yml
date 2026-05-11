@@ -49,7 +49,7 @@ format:
     - filename: "directors_2024_03.csv"
       skip_rows: 1
 
-  comment_prefix: "#"              # (optional) rows starting with this prefix are discarded
+  comment_prefix: ["#"]              # (optional) rows starting with this prefix are discarded
                                          # no native DuckDB param — applied as post-read WHERE left(col, 1) != prefix
                                          # not applicable for json/xml
 
@@ -134,7 +134,7 @@ schema:
     min: 0.0
 
 bad_records:
-  handling: move                        # move  → COPY bad rows to bad_records_path via COPY ... TO (FORMAT CSV)
+  handling: continue                        # continue  → continue processing after logging bad records
                                          # fail  → raise AirflowException when threshold is breached
   threshold: 10                          # numeric value (meaning depends on threshold_type)
   threshold_type: percentage             # percentage | count
