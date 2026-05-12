@@ -283,6 +283,23 @@ Controls what happens when a column value is `NULL` (or becomes `NULL` after a f
 
 ---
 
+### `type: concat`
+
+Replaces the column's value by joining columns and/or literal strings with a separator. `NULL` parts are silently skipped (same behaviour as SQL `concat_ws`).
+
+```yaml
+- type: concat
+  separator: " | "
+  parts:
+    - column: director_name    # reference any existing column (including this one)
+    - column: genre
+    - literal: "(verified)"    # fixed string fragment
+```
+
+DuckDB: `concat_ws(separator, part1, part2, ...)`
+
+---
+
 ## `new_columns`
 
 A list of derived column definitions. Each entry is appended to the output in the order listed.

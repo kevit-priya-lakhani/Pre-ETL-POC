@@ -170,6 +170,21 @@ columns:
         pattern: '^[A-Z]{2,4}\d{6,12}$'     # e.g., ACC001234, LN00012345
         on_mismatch: drop_row
 
+  # ──────────────────────────────────────────────────────────────
+  # full_label  (string)  — concat transformation on an existing column
+  # ──────────────────────────────────────────────────────────────
+  - name: full_label
+    transformations:
+      # Concat — replaces this column's value by joining columns and/or literals with a separator.
+      # NULL parts are silently skipped (concat_ws behaviour).
+      # DuckDB: concat_ws(' | ', director_name, genre, '(verified)')
+      - type: concat
+        separator: " | "
+        parts:
+          - column: director_name      # reference any existing column (including this one)
+          - column: genre
+          - literal: "(verified)"      # fixed string fragment
+
 
 # ──────────────────────────────────────────────────────────────
 # new_columns — derived / computed columns added to the output
