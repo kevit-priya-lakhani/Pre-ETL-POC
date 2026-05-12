@@ -110,6 +110,66 @@ columns:
       - type: null_handling
         strategy: drop_row
 
+  # ──────────────────────────────────────────────────────────────
+  # phone_number  (string)  — regex_replace example (normalization)
+  # ──────────────────────────────────────────────────────────────
+  - name: phone_number
+    transformations:
+      - type: trim
+        side: both
+
+      # Regex replace — general-purpose find/replace using a regular expression
+      # Strips all non-digit characters: (123) 456-7890 → 1234567890
+      # DuckDB: regexp_replace(col, '[^0-9]', '', 'g')
+      - type: regex_replace
+        pattern: '[^0-9]'                   # regex pattern to match
+        replacement: ''                     # string to substitute for each match
+        flags: 'g'                          # optional; default 'g' (global). DuckDB regex flags:
+                                            #   g = global (all matches), i = case-insensitive,
+                                            #   s = dotall (. matches \n), m = multiline
+
+      # Another regex_replace — prefix with country code if not already present
+      # Adds '00' prefix only when the number does not already start with '00'
+      # DuckDB: regexp_replace(col, '^(?!00)', '00')
+      # - type: regex_replace
+      #   pattern: '^(?!00)'
+      #   replacement: '00'
+
+  # ──────────────────────────────────────────────────────────────
+  # email  (string)  — regex_validate example
+  # ──────────────────────────────────────────────────────────────
+  - name: email
+    transformations:
+      - type: trim
+        side: both
+
+      - type: case_conversion
+        to: lower
+
+      # Regex validate — tests the value against a regex pattern;
+      # values that do NOT match are either nullified or cause the row to be dropped.
+      # DuckDB (nullify):   CASE WHEN regexp_matches(col, pattern) THEN col ELSE NULL END
+      # DuckDB (drop_row):  WHERE regexp_matches(col, pattern)
+      - type: regex_validate
+        pattern: '^[a-z0-9._%+\-]+@[a-z0-9.\-]+\.[a-z]{2,}$'   # regex the value must match
+        on_mismatch: nullify                # nullify | drop_row
+                                            #   nullify  — set non-matching values to NULL
+                                            #             (can be paired with a downstream null_handling)
+                                            #   drop_row — discard the entire row if it doesn't match
+
+  # ──────────────────────────────────────────────────────────────
+  # account_code  (string)  — regex_validate with drop_row
+  # ──────────────────────────────────────────────────────────────
+  - name: account_code
+    transformations:
+      - type: trim
+        side: both
+
+      # Drop rows where account_code doesn't match the expected format
+      - type: regex_validate
+        pattern: '^[A-Z]{2,4}\d{6,12}$'     # e.g., ACC001234, LN00012345
+        on_mismatch: drop_row
+
 
 # ──────────────────────────────────────────────────────────────
 # new_columns — derived / computed columns added to the output
@@ -168,6 +228,14 @@ new_columns:
     type: string
     value: uuid
 
+  # Sequential integer series — row number starting at 1
+  # DuckDB: ROW_NUMBER() OVER ()
+  - name: row_num
+    type: integer
+    value: series
+    # start: 1     # optional; first value (default: 1)
+    # step: 1      # optional; increment per row (default: 1)
+
   # Load timestamp — current timestamp at pipeline execution time
   # DuckDB: NOW()
   - name: ingested_at
@@ -190,5 +258,3 @@ new_columns:
     value: date_function
     function: month
     source_column: debut_date
-
- 

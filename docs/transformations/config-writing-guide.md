@@ -108,6 +108,114 @@ Extracts a portion of a string column by position or regex pattern.
   mode: pattern
   pattern: "^([^.]+)\."    # extracts text before the first period
 ```
+
+---
+
+### `type: regex_replace`
+
+General-purpose find/replace using a regular expression. Use this for normalization tasks like stripping unwanted characters, reformatting values, or injecting prefixes/suffixes based on pattern matches.
+
+```yaml
+- type: regex_replace
+  pattern: '[^0-9]'        # regex pattern to match
+  replacement: ''           # string to substitute for each match
+  flags: 'g'                # optional; default 'g' (global)
+```
+
+DuckDB: `regexp_replace(col, pattern, replacement, flags)`
+
+**DuckDB regex flags:**
+
+| Flag | Meaning |
+|------|---------|
+| `g`  | Global — replace all matches, not just the first |
+| `i`  | Case-insensitive matching |
+| `s`  | Dotall — `.` matches newline characters |
+| `m`  | Multiline — `^` and `$` match line boundaries |
+
+Flags can be combined (e.g., `'gi'` for global + case-insensitive). When `flags` is omitted, it defaults to `'g'`.
+
+**Examples:**
+
+Strip all non-digit characters from a phone number:
+```yaml
+# (123) 456-7890 → 1234567890
+- type: regex_replace
+  pattern: '[^0-9]'
+  replacement: ''
+```
+
+Remove HTML tags from a free-text comments field:
+```yaml
+# <b>Overdue</b> since Jan → Overdue since Jan
+- type: regex_replace
+  pattern: '<[^>]+>'
+  replacement: ''
+```
+
+Collapse multiple whitespace characters into a single space:
+```yaml
+# "John    Doe" → "John Doe"
+- type: regex_replace
+  pattern: '\s+'
+  replacement: ' '
+```
+
+Mask digits in a national ID, keeping only the last 4:
+```yaml
+# 123-45-6789 → ***-**-6789
+- type: regex_replace
+  pattern: '\d(?=\d{4})'
+  replacement: '*'
+```
+
+---
+
+### `type: regex_validate`
+
+Tests the column value against a regex pattern. Values that **do not match** are either nullified or cause the entire row to be dropped. Use this for format enforcement — ensuring phone numbers, emails, codes, or IDs conform to an expected structure before downstream processing.
+
+```yaml
+- type: regex_validate
+  pattern: '^[A-Z]{2,4}\d{6,12}$'   # regex the value must match
+  on_mismatch: nullify                # nullify | drop_row
+```
+
+DuckDB (nullify): `CASE WHEN regexp_matches(col, pattern) THEN col ELSE NULL END`
+DuckDB (drop_row): `WHERE regexp_matches(col, pattern)`
+
+**`on_mismatch` options:**
+
+| Option | Behaviour |
+|--------|-----------|
+| `nullify` | Set non-matching values to `NULL`. Can be paired with a downstream `null_handling` (e.g., replace with a default, or drop the row). |
+| `drop_row` | Discard the entire row if the value does not match the pattern. |
+
+**Examples:**
+
+Validate email format (nullify invalid):
+```yaml
+- type: regex_validate
+  pattern: '^[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}$'
+  on_mismatch: nullify
+```
+
+Enforce account code format (drop non-conforming rows):
+```yaml
+# Accept only codes like ACC001234, LN00012345
+- type: regex_validate
+  pattern: '^[A-Z]{2,4}\d{6,12}$'
+  on_mismatch: drop_row
+```
+
+Validate phone number contains only digits after prior cleanup:
+```yaml
+- type: regex_validate
+  pattern: '^\d{7,15}$'
+  on_mismatch: nullify
+```
+
+
 ---
 
 ### `type: case_conversion`
@@ -142,7 +250,7 @@ Strips or replaces non-printable control characters (outside the ASCII printable
 
 ### `type: null_handling`
 
-Controls what happens when a column value is `NULL` (or becomes `NULL` after a failed `cast`). Optionally also treats empty strings and whitespace-only strings the same as `NULL` by setting `include_empty: true`.
+Controls what happens when a column value is `NULL` (or becomes `NULL` after a failed `cast` or `regex_validate`). Optionally also treats empty strings and whitespace-only strings the same as `NULL` by setting `include_empty: true`.
 
 **Replace with a default value:**
 ```yaml
@@ -291,6 +399,25 @@ Generates a unique random UUID for every row.
   value: uuid
 ```
 
+---
+
+### `value: series`
+
+Generates a sequential integer for every row, equivalent to a SQL `ROW_NUMBER()`. Use this when you need a deterministic, ordered surrogate key instead of a random UUID.
+
+```yaml
+- name: row_num
+  type: integer
+  value: series
+  start: 1      # optional; first value in the sequence (default: 1)
+  step: 1       # optional; increment between consecutive rows (default: 1)
+```
+
+- `start` defaults to `1`.
+- `step` defaults to `1`; use a negative value to count downward.
+- DuckDB: `(ROW_NUMBER() OVER () - 1) * step + start`  
+  (simplifies to `ROW_NUMBER() OVER ()` when `start = 1` and `step = 1`)
+
 
 ---
 
@@ -331,6 +458,8 @@ Extracts a date component or performs date arithmetic.
 | `date_conversion` | `source_formats`, `target_format` | `TRY_CAST(strptime(…) AS DATE)` |
 | `substring` | `mode: position` → `start`, `length` | `SUBSTRING(col, start, length)` |
 | `substring` | `mode: pattern` → `pattern` | `regexp_extract(col, pattern, 1)` |
+| `regex_replace` | `pattern`, `replacement`, `flags` (opt, default `'g'`) | `regexp_replace(col, pattern, replacement, flags)` |
+| `regex_validate` | `pattern`, `on_mismatch: nullify\|drop_row` | `CASE WHEN regexp_matches(…)` / `WHERE regexp_matches(…)` |
 | `case_conversion` | `to: upper\|lower` | `UPPER` / `LOWER` |
 | `remove_non_printable` | `replace_with` (optional, default `""`) | `regexp_replace(col, '[^\x20-\x7E]', replace_with, 'g')` |
 | `null_handling` | `strategy: replace` → `replace_with`, `include_empty` (opt) | `COALESCE(col, default)` / `COALESCE(NULLIF(TRIM(col), ''), default)` |
@@ -346,4 +475,5 @@ Extracts a date component or performs date arithmetic.
 | `concat` | `separator`, `parts[]` | `concat_ws(sep, …)` |
 | `conditional` | `cases[]` (`when`/`then`), `else` | `CASE WHEN … END` |
 | `uuid` | _(none)_ | `gen_random_uuid()` |
+| `series` | `start` (opt, default 1), `step` (opt, default 1) | `(ROW_NUMBER() OVER () - 1) * step + start` |
 | `date_function` `year\|month\|day\|day_of_week` | `function`, `source_column` | `YEAR()` / `MONTH()` / `DAY()` / `DAYOFWEEK()` |

@@ -52,6 +52,10 @@ DuckDB: `CASE WHEN … THEN … ELSE … END`
 uuid
 DuckDB: `gen_random_uuid()`
 
+series
+DuckDB: `ROW_NUMBER() OVER ()`
+With custom start/step: `(ROW_NUMBER() OVER () - 1) * step + start`
+
 date_function
 DuckDB: `YEAR(debut_date)` / `MONTH(…)` / `DAY(…)`
 DuckDB: `DAYOFWEEK(debut_date)`
