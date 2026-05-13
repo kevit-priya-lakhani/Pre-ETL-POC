@@ -1,0 +1,136 @@
+# ============================================================================
+# SCHEMA MAPPING / DATA LOADING CONFIG — EXAMPLE
+# ============================================================================
+# Loads Parquet files (produced by the ingestion, transformation, or
+# aggregation stage) into a destination: Postgres, Oracle, or the filesystem.
+#
+# One config = one destination system.  Multiple tables are supported via the
+# `tables` list — each entry is an independent load operation.
+# Connection credentials are managed entirely through Airflow connections —
+# no secrets in this file.
+# ============================================================================
+
+
+# ---------------------------------------------------------------------------
+# DESTINATION  (connection-level — shared across all tables)
+# Uncomment exactly one destination block.
+# ---------------------------------------------------------------------------
+
+# ── Option A: PostgreSQL ────────────────────────────────────────────────────
+destination:
+  type: postgres                        # postgres | oracle | filesystem
+  connection_id: "postgres_default"     # Airflow connection ID (holds host/port/user/password)
+  schema: "public"                      # default DB schema (can be overridden per table)
+
+# ── Option B: Oracle ────────────────────────────────────────────────────────
+# destination:
+#   type: oracle
+#   connection_id: "oracle_prod"        # Airflow connection ID
+#   schema: "FINANCE"                   # default schema (can be overridden per table)
+
+# ── Option C: Filesystem (local) ────────────────────────────────────────────
+# destination:
+#   type: filesystem
+#   base_path: /output/                 # root directory; each table entry appends its own sub-path
+#   format: parquet                     # default format (can be overridden per table)
+#   write_mode: overwrite               # default write mode (can be overridden per table)
+
+# ── Option D: Filesystem (SFTP) ──────────────────────────────────────────────
+# destination:
+#   type: filesystem
+#   connection_id: "sftp_output"        # Airflow SFTP connection ID
+#   base_path: /remote/output/          # root directory on the SFTP server
+#   format: parquet                     # default format (can be overridden per table)
+#   write_mode: overwrite               # default write mode (can be overridden per table)
+
+
+# ---------------------------------------------------------------------------
+# TABLES
+# Each entry is one independent load operation.  Tables are processed in the
+# order listed.  All keys except `source` and `table` (or `path` for
+# filesystem) are optional and fall back to the defaults documented below.
+# ---------------------------------------------------------------------------
+tables:
+
+  # ── Table 1: DB load (upsert) ───────────────────────────────────────────
+  - source:
+      file_id: "sales_summary_enriched"  # file_id from ingestion / transformation / aggregation stage
+
+    table: "sales_summary"               # destination table name
+    # schema: "reporting"                # override destination.schema for this table only
+
+    # COPY MODE
+    # insert_update — upsert: insert new rows, update existing rows (matched by primary_key)
+    # update_only   — only update rows that already exist; skip new rows
+    copy_mode: insert_update             # insert_update | update_only
+
+    # PRIMARY KEY — columns used to match source rows against destination rows
+    primary_key:
+      - account_id
+      - product_code
+
+    # COLUMN MAPPING
+    # All source columns are mapped 1:1 by default.
+    # Only list columns that need a rename or should be excluded.
+    columns:
+      - source: acct_number
+        destination: account_number      # rename
+      - source: open_dt
+        destination: open_date           # rename
+      - source: internal_flag
+        include: false                   # exclude — do not write to destination
+
+    # EMPTY SOURCE BEHAVIOR  (DB destinations only)
+    # update — overwrite existing destination value with null / empty
+    # leave  — keep existing destination value unchanged
+    empty_source_behavior:
+      default: update                    # update | leave
+      overrides:
+        - column: customer_notes
+          behavior: leave
+        - column: last_modified_by
+          behavior: leave
+
+    # DELETE  (DB destinations only; opt-in)
+    delete:
+      enabled: false
+      # mode: sync_delete                # delete destination rows absent from source
+      # match_key: [account_id]          # optional — defaults to primary_key
+
+      # mode: condition                  # delete rows matching a SQL WHERE clause (runs before load)
+      # condition: "status = 'CLOSED' AND closed_date < current_date - interval '1 year'"
+
+      # mode: truncate_before_load       # full truncate then reload
+
+
+  # ── Table 2: DB load (update-only, no column remapping) ─────────────────
+  - source:
+      file_id: "product_detail_output"
+
+    table: "products"
+    copy_mode: update_only
+
+    primary_key:
+      - product_code
+
+    empty_source_behavior:
+      default: leave                     # never overwrite with nulls for this table
+
+    delete:
+      enabled: true
+      mode: sync_delete                  # remove products no longer in the source file
+
+
+  # ── Table 3: Filesystem output (parquet, per-table path) ─────────────────
+  # Filesystem tables ignore primary_key, copy_mode, empty_source_behavior,
+  # and delete.  They only use source, path, connection_id, format, and write_mode.
+  - source:
+      file_id: "store_performance_output"
+
+    path: store_performance/             # appended to destination.base_path
+    # connection_id: "sftp_alt"          # (optional) override destination.connection_id for this table only
+    # format: csv                        # override destination.format for this table
+    # write_mode: append                 # override destination.write_mode for this table
+    # partition_by:                      # (optional) partition parquet output by column values
+    #   - year
+    #   - month
