@@ -1,16 +1,47 @@
 # ============================================================================
-# AGGREGATION & MERGE PIPELINE — CONFIG SCHEMA
+# AGGREGATION & MERGE PIPELINE — CONFIG SCHEMA (fan-out / Option B)
 # ============================================================================
 # This config defines post-ingestion aggregation tasks: merging files,
 # aggregating data, applying column transforms, and writing destinations.
 #
-# Execution: tasks run in the order listed. Each task produces a destination
-# that downstream tasks can reference by ID. Source/destination file IDs are
-# resolved via a central job.yml that wires ingestion → transformation →
-# aggregation stages together.
+# Execution model:
+#   - Tasks run in the order listed (top-to-bottom).
+#   - Intermediate file_ids are used only between tasks in this config.
+#   - Terminal file_ids are declared in `outputs` and consumed by the DB
+#     copy stage (job.yml). They are NOT necessarily the last task listed.
+#   - Multiple tasks may share the same source.file_id (fan-out pattern).
+#     The shared source parquet is simply read multiple times — cheap on disk.
+#
+# Task graph for this example:
+#
+#   TASK 1: merge ──────────────────► merged_sales_output  (intermediate)
+#                                           │
+#               ┌──────────────────────────┼───────────────────────┐
+#               ▼                          ▼                       ▼
+#   TASK 2: column_transformation  TASK 3: aggregation    TASK 5: aggregation
+#      product_detail_output [T]    sales_summary_raw (i)  store_perf_output [T]
+#                                          │
+#                                          ▼
+#                                   TASK 4: column_transformation
+#                                    sales_summary_enriched [T]
+#                                          │
+#                                          ▼
+#                                   TASK 6: validation (pass-through)
+#
+#   [T] = terminal (listed in outputs)   (i) = intermediate
 #
 # Engine: DuckDB
 # ============================================================================
+
+# --------------------------------------------------------------------------
+# OUTPUTS — terminal file_ids consumed by the DB copy stage (job.yml).
+# Intermediate file_ids used only within this config are NOT listed here.
+# --------------------------------------------------------------------------
+outputs:
+  - file_id: "product_detail_output"      # → Product table
+  - file_id: "sales_summary_enriched"     # → SalesSummary table
+  - file_id: "store_performance_output"   # → StorePerformance table
+
 
 # --------------------------------------------------------------------------
 # TASKS — executed sequentially, top to bottom
@@ -18,11 +49,13 @@
 tasks:
 
   # ========================================================================
-  # TASK 1 — MERGE (join multiple source files)
+  # TASK 1 — MERGE (shared base, intermediate)
+  # Combines north + south regional sales with product master.
+  # Produces merged_sales_output, which Tasks 2, 3, and 5 all read from.
   # ========================================================================
   - task_id: "merged_sales"
     type: "merge"
-    description: "Join regional sales with product master"
+    description: "Union north/south sales then left-join with product master"
 
     sources:
       # Every source references a file_id declared in job.yml.
@@ -93,18 +126,211 @@ tasks:
           direction: "desc"
 
     destination:
-      file_id: "merged_sales_output"   # ID for downstream reference
+      file_id: "merged_sales_output"   # intermediate — read by Tasks 2, 3, 5
 
 
   # ========================================================================
-  # TASK 2 — AGGREGATION
+  # TASK 2 — BRANCH A: Product detail  [fan-out from merged_sales_output]
+  # Column-level cleanup on the raw merged rows; one row per sale transaction.
+  # Terminal → Product table.
   # ========================================================================
-  - task_id: "sales_summary"
+  - task_id: "prepare_product_detail"
+    type: "column_transformation"
+    description: "Clean and shape product-level detail rows for DB load"
+
+    source:
+      file_id: "merged_sales_output"   # shared base — also read by Tasks 3 and 5
+
+    # ── Per-column transformations ────────────────────────────────────────
+    # Operations are applied in the order listed within each column block.
+    columns:
+
+      # ──────────────────────────────────────────────────────────────
+      # product_name  (string) — trim + remove_non_printable + substring
+      #                         + regex_replace + regex_validate
+      # ──────────────────────────────────────────────────────────────
+      - name: product_name
+        transformations:
+          # Trimming — strips leading/trailing whitespace
+          # DuckDB: TRIM(product_name)
+          - type: trim
+            side: both                       # both | left | right
+
+          # Non-printable character removal — replaces control characters with ""
+          # DuckDB: regexp_replace(col, '[^\x20-\x7E]', '', 'g')
+          - type: remove_non_printable
+
+          # Substring by position — cap at 100 characters
+          # DuckDB: SUBSTRING(product_name, 1, 100)
+          - type: substring
+            mode: position                   # position | pattern
+            start: 1                         # 1-based index
+            length: 100
+
+          # Substring by pattern — extracts first regex capture group (commented example)
+          # DuckDB: regexp_extract(col, pattern, 1)
+          # - type: substring
+          #   mode: pattern
+          #   pattern: "^([^(]+)"            # capture group 1 = text before first parenthesis
+
+          # Regex replace — strip non-alphanumeric characters
+          # DuckDB: regexp_replace(col, '[^A-Za-z0-9 ]', '', 'g')
+          - type: regex_replace
+            pattern: '[^A-Za-z0-9 ]'
+            replacement: ''
+            flags: 'g'                       # g = global | i = case-insensitive | s = dotall | m = multiline
+
+          # Regex validate — nullify values that do not match the expected format
+          # DuckDB: CASE WHEN regexp_matches(col, pattern) THEN col ELSE NULL END
+          - type: regex_validate
+            pattern: '^\S+'                  # must contain at least one non-whitespace character
+            on_mismatch: nullify             # nullify | drop_row
+
+      # ──────────────────────────────────────────────────────────────
+      # category  (string) — trim + case_conversion + null_handling
+      # ──────────────────────────────────────────────────────────────
+      - name: category
+        transformations:
+          - type: trim
+            side: both
+
+          # Upper/lower case conversion
+          # DuckDB: UPPER(category)
+          - type: case_conversion
+            to: upper                        # upper | lower
+
+          # Null value handling — replace nulls with a default value
+          # DuckDB: COALESCE(category, 'UNKNOWN')
+          - type: null_handling
+            strategy: replace                # replace | drop_row
+            replace_with: "UNKNOWN"          # used when strategy is replace; must match column type
+                                             # omit when strategy is drop_row
+
+      # ──────────────────────────────────────────────────────────────
+      # revenue  (float) — cast + round
+      # ──────────────────────────────────────────────────────────────
+      - name: revenue
+        transformations:
+          # Type casting — explicit cast to the target SQL type
+          # DuckDB: TRY_CAST(revenue AS FLOAT)
+          - type: cast
+            to: float                        # string | integer | float | boolean | date | datetime
+
+          # Rounding — rounds a numeric value to N decimal places
+          # DuckDB: ROUND(revenue, 2)
+          - type: round
+            decimal_places: 2
+
+      # ──────────────────────────────────────────────────────────────
+      # sale_date  (date) — trim + date_conversion
+      # ──────────────────────────────────────────────────────────────
+      - name: sale_date
+        transformations:
+          - type: trim
+            side: both
+
+          # Date conversion — parse and reformat to a canonical output
+          # DuckDB: TRY_CAST(strptime(col, source_formats[0]) AS DATE)
+          #         Falls through source_formats list until one succeeds.
+          - type: date_conversion
+            source_formats:                  # try each format in order; first non-null result wins
+              - "%Y-%m-%d"
+              - "%Y%m%d"
+            target_format: "%Y-%m-%d"
+
+      # ──────────────────────────────────────────────────────────────
+      # store_label  (string) — concat: derive a display label
+      # ──────────────────────────────────────────────────────────────
+      - name: store_label
+        transformations:
+          # Concat — replaces this column's value by joining columns and/or literals.
+          # NULL parts are silently skipped (concat_ws behaviour).
+          # DuckDB: concat_ws(' | ', store_id, category)
+          - type: concat
+            separator: " | "
+            parts:
+              - column: store_id
+              - column: category
+              - literal: "(store)"
+
+      # ──────────────────────────────────────────────────────────────
+      # sale_date  — drop_row if null (data quality guard)
+      # ──────────────────────────────────────────────────────────────
+      - name: sale_date
+        transformations:
+          # Null value handling — drop rows where this column is null
+          # Applied as: WHERE sale_date IS NOT NULL
+          - type: null_handling
+            strategy: drop_row
+
+      # ──────────────────────────────────────────────────────────────
+      # product_id — rename to align with DB schema column name
+      # ──────────────────────────────────────────────────────────────
+      - name: product_id
+        transformations:
+          # Rename — renames the column in the output
+          - type: rename
+            to: source_product_id
+
+    # ── New / derived columns ─────────────────────────────────────────────
+    new_columns:
+
+      # Fixed value — pipeline tag constant for every row
+      # DuckDB: SELECT 'SALES_PIPELINE' AS pipeline_id
+      - name: pipeline_id
+        type: string
+        value: fixed
+        fixed_value: "SALES_PIPELINE"
+
+      # Auto-generated UUID key — unique per row
+      # DuckDB: gen_random_uuid()
+      - name: record_id
+        type: string
+        value: uuid
+
+      # Load timestamp
+      # DuckDB: NOW()
+      - name: loaded_at
+        type: datetime
+        value: expression
+        expression: "NOW()"
+
+      # Date function — extract year from sale_date
+      # DuckDB: YEAR(sale_date)
+      - name: sale_year
+        type: integer
+        value: date_function
+        function: year                       # year | month | day
+        source_column: sale_date
+
+    select_columns:
+      - "record_id"
+      - "store_id"
+      - "store_label"
+      - "source_product_id"
+      - "product_name"
+      - "category"
+      - "sale_date"
+      - "sale_year"
+      - "quantity"
+      - "revenue"
+      - "pipeline_id"
+      - "loaded_at"
+
+    destination:
+      file_id: "product_detail_output"  # terminal ✓ → Product table
+
+
+  # ========================================================================
+  # TASK 3 — BRANCH B: Sales aggregation  [fan-out from merged_sales_output]
+  # Aggregate by category + month. Produces an intermediate that Task 4 enriches.
+  # ========================================================================
+  - task_id: "agg_sales_by_category_month"
     type: "aggregation"
     description: "Aggregate merged sales by category and month"
 
     source:
-      file_id: "merged_sales_output"   # references Task 1's output
+      file_id: "merged_sales_output"   # shared base — also read by Tasks 2 and 5
 
     # GROUP BY columns
     group_by:
@@ -176,22 +402,22 @@ tasks:
     limit: null                        # null = no limit
 
     destination:
-      file_id: "sales_summary_output"
+      file_id: "sales_summary_raw"     # intermediate — consumed only by Task 4
 
 
   # ========================================================================
-  # TASK 3 — COLUMN TRANSFORMATIONS (on aggregated output)
+  # TASK 4 — BRANCH B continued: Enrich sales summary
+  # Chains from Task 3's output. Adds derived columns and shapes final output.
+  # Terminal → SalesSummary table.
   # ========================================================================
-  - task_id: "enrich_summary"
+  - task_id: "enrich_sales_summary"
     type: "column_transformation"
-    description: "Apply column-level transforms to the aggregated output"
+    description: "Apply column-level transforms and derive new columns on aggregated output"
 
     source:
-      file_id: "sales_summary_output"
+      file_id: "sales_summary_raw"     # intermediate from Task 3
 
     # ── Per-column transformations ────────────────────────────────────────
-    # Operations are applied in the order listed within each column block.
-    # Transform types and field names mirror the standalone transformation config.
     columns:
 
       # ──────────────────────────────────────────────────────────────
@@ -222,112 +448,50 @@ tasks:
             decimal_places: 2
 
       # ──────────────────────────────────────────────────────────────
-      # sale_month  (date) — date conversion + trim
+      # sale_month  (date) — trim + date_conversion
       # ──────────────────────────────────────────────────────────────
       - name: sale_month
         transformations:
-          # Trimming — strips leading/trailing whitespace
-          # DuckDB: TRIM(sale_month)
           - type: trim
-            side: both                       # both | left | right
+            side: both
 
           # Date conversion — parse and reformat to a canonical output
-          # DuckDB: TRY_CAST(strptime(col, source_formats[0]) AS DATE)
-          #         Falls through source_formats list until one succeeds.
           - type: date_conversion
-            source_formats:                  # try each format in order; first non-null result wins
+            source_formats:
               - "%Y-%m-%d"
               - "%Y%m%d"
-            target_format: "%Y-%m"           # output format
+            target_format: "%Y-%m"
 
       # ──────────────────────────────────────────────────────────────
-      # category  (string) — trim + remove_non_printable + case_conversion
+      # category  (string) — trim + remove_non_printable + case + null
       # ──────────────────────────────────────────────────────────────
       - name: category
         transformations:
           - type: trim
             side: both
 
-          # Non-printable character removal — replaces control characters with ""
-          # DuckDB: regexp_replace(col, '[^\x20-\x7E]', '', 'g')
           - type: remove_non_printable
 
-          # Upper/lower case conversion
-          # DuckDB: UPPER(category)
           - type: case_conversion
-            to: upper                        # upper | lower
+            to: upper
 
-          # Null value handling — replace nulls with a default value
-          # DuckDB: COALESCE(category, 'UNKNOWN')
           - type: null_handling
-            strategy: replace                # replace | drop_row
-            replace_with: "UNKNOWN"          # used when strategy is replace; must match column type
-                                             # omit when strategy is drop_row
+            strategy: replace
+            replace_with: "UNKNOWN"
 
       # ──────────────────────────────────────────────────────────────
-      # product_name  (string) — substring + regex_replace + regex_validate
-      # ──────────────────────────────────────────────────────────────
-      - name: product_name
-        transformations:
-          - type: trim
-            side: both
-
-          # Substring by position — extracts characters starting at `start` for `length` chars
-          # DuckDB: SUBSTRING(product_name, 1, 100)
-          - type: substring
-            mode: position                   # position | pattern
-            start: 1                         # 1-based index
-            length: 100
-
-          # Substring by pattern — extracts first regex capture group
-          # DuckDB: regexp_extract(col, pattern, 1)
-          # - type: substring
-          #   mode: pattern
-          #   pattern: "^([^(]+)"            # capture group 1 = text before first parenthesis
-
-          # Regex replace — strip non-alphanumeric characters
-          # DuckDB: regexp_replace(col, '[^A-Za-z0-9 ]', '', 'g')
-          - type: regex_replace
-            pattern: '[^A-Za-z0-9 ]'
-            replacement: ''
-            flags: 'g'                       # g = global | i = case-insensitive | s = dotall | m = multiline
-
-          # Regex validate — nullify values that do not match the expected format
-          # DuckDB: CASE WHEN regexp_matches(col, pattern) THEN col ELSE NULL END
-          - type: regex_validate
-            pattern: '^\S+'                  # must contain at least one non-whitespace character
-            on_mismatch: nullify             # nullify | drop_row
-
-      # ──────────────────────────────────────────────────────────────
-      # store_label  (string) — concat on an existing column
-      # ──────────────────────────────────────────────────────────────
-      - name: store_label
-        transformations:
-          # Concat — replaces this column's value by joining columns and/or literals.
-          # NULL parts are silently skipped (concat_ws behaviour).
-          # DuckDB: concat_ws(' | ', store_id, category)
-          - type: concat
-            separator: " | "
-            parts:
-              - column: store_id
-              - column: category
-              - literal: "(store)"
-
-      # ──────────────────────────────────────────────────────────────
-      # earliest_sale  (date) — null drop_row example
+      # earliest_sale — drop row if null (data quality guard)
       # ──────────────────────────────────────────────────────────────
       - name: earliest_sale
         transformations:
-          # Null value handling — drop rows where this column is null
-          # Applied as: WHERE earliest_sale IS NOT NULL
           - type: null_handling
             strategy: drop_row
 
-    # ── New / derived columns added to the output ─────────────────────────
+    # ── New / derived columns ─────────────────────────────────────────────
     new_columns:
 
       # Expression — raw DuckDB SQL referencing existing columns
-      # DuckDB: SELECT ROUND(revenue_total / NULLIF(total_quantity, 0), 2)
+      # DuckDB: ROUND(revenue_total / NULLIF(total_quantity, 0), 2)
       - name: revenue_per_unit
         type: float
         value: expression
@@ -363,7 +527,7 @@ tasks:
         value: arithmetic
         expression: "revenue_total * 1.1"
 
-      # Fixed value — constant for every row
+      # Fixed value — pipeline tag constant for every row
       # DuckDB: SELECT 'SALES_AGG' AS pipeline_id
       - name: pipeline_id
         type: string
@@ -384,14 +548,14 @@ tasks:
         # start: 1   # optional; first value (default: 1)
         # step: 1    # optional; increment per row (default: 1)
 
-      # Load timestamp — current timestamp at pipeline execution time
+      # Load timestamp
       # DuckDB: NOW()
       - name: aggregated_at
         type: datetime
         value: expression
         expression: "NOW()"
 
-      # Date function — extract a date component from an existing date column
+      # Date function — extract year from earliest_sale
       # DuckDB: YEAR(earliest_sale)
       - name: sale_year
         type: integer
@@ -405,8 +569,10 @@ tasks:
     drop_columns: ["min_revenue"]      # remove columns not needed in the output
 
     select_columns:                    # final column order; omit to keep all
+      - "record_id"
       - "category"
       - "sale_month"
+      - "sale_year"
       - "transaction_count"
       - "unique_stores"
       - "total_quantity"
@@ -415,29 +581,88 @@ tasks:
       - "max_revenue"
       - "revenue_per_unit"
       - "revenue_tier"
-      - "summary_label"
       - "revenue_with_tax"
+      - "summary_label"
       - "pipeline_id"
-      - "record_id"
       - "row_num"
       - "aggregated_at"
-      - "sale_year"
       - "earliest_sale"
       - "latest_sale"
 
     destination:
-      file_id: "final_enriched_summary"
+      file_id: "sales_summary_enriched"  # terminal ✓ → SalesSummary table
 
 
   # ========================================================================
-  # TASK 4 — VALIDATION (optional, recommended)
+  # TASK 5 — BRANCH C: Store performance  [fan-out from merged_sales_output]
+  # Independent aggregation by store — different group-by key, different shape.
+  # Terminal → StorePerformance table.
   # ========================================================================
-  - task_id: "validate_output"
-    type: "validation"
-    description: "Sanity checks before handing off"
+  - task_id: "agg_store_performance"
+    type: "aggregation"
+    description: "Aggregate merged sales by store"
 
     source:
-      file_id: "final_enriched_summary"
+      file_id: "merged_sales_output"   # shared base — also read by Tasks 2 and 3
+
+    group_by:
+      - column: "store_id"
+
+    aggregations:
+      - function: "sum"
+        column: "revenue"
+        alias: "total_revenue"
+
+      - function: "sum"
+        column: "quantity"
+        alias: "total_quantity"
+
+      - function: "count"
+        column: "*"
+        alias: "transaction_count"
+
+      - function: "avg"
+        column: "revenue"
+        alias: "avg_revenue_per_transaction"
+
+      - function: "count_distinct"
+        column: "product_id"
+        alias: "unique_products_sold"
+
+      - function: "first"
+        column: "sale_date"
+        alias: "first_sale_date"
+        order_by:
+          - column: "sale_date"
+            direction: "asc"
+
+      - function: "last"
+        column: "sale_date"
+        alias: "last_sale_date"
+        order_by:
+          - column: "sale_date"
+            direction: "asc"
+
+    order_by:
+      - column: "total_revenue"
+        direction: "desc"
+
+    limit: null
+
+    destination:
+      file_id: "store_performance_output"  # terminal ✓ → StorePerformance table
+
+
+  # ========================================================================
+  # TASK 6 — VALIDATION on main summary output (optional, recommended)
+  # Chains from Task 4. Pass-through: same file_id in and out.
+  # ========================================================================
+  - task_id: "validate_sales_summary"
+    type: "validation"
+    description: "Sanity checks on sales_summary_enriched before DB load"
+
+    source:
+      file_id: "sales_summary_enriched"
 
     assertions:
       - check: "row_count"
@@ -459,12 +684,16 @@ tasks:
         on_fail: "error"
 
     destination:
-      file_id: "final_enriched_summary"  # pass-through; same ID if valid
+      file_id: "sales_summary_enriched"  # pass-through; same ID if all assertions pass
 
 
 # ============================================================================
 # SCHEMA REFERENCE — quick lookup of allowed values
 # ============================================================================
+#
+#  TOP-LEVEL KEYS:     outputs | tasks
+#
+#  OUTPUTS:            list of { file_id } — terminal destinations for job.yml
 #
 #  TASK TYPES:         merge | aggregation | column_transformation | validation
 #
