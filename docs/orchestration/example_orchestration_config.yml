@@ -1,0 +1,97 @@
+# ============================================================================
+# JOB ORCHESTRATION CONFIG — EXAMPLE
+# ============================================================================
+# Top-level config that ties all pipeline stages together and schedules the
+# Airflow DAG. Stage configs are referenced by file path.
+# Credentials are never stored here — they live in Airflow connections.
+# ============================================================================
+
+
+# ---------------------------------------------------------------------------
+# JOB IDENTITY
+# ---------------------------------------------------------------------------
+job_id: "accounts_daily_load"
+description: "Daily ingestion, transformation, aggregation, and load of account and payment data"
+
+
+# ---------------------------------------------------------------------------
+# SCHEDULE
+# Airflow DAG scheduling and retry parameters.
+# ---------------------------------------------------------------------------
+schedule:
+  cron: "0 6 * * *"            # cron expression — this example runs daily at 06:00
+                                # use "@once" to run exactly once; omit (or null) for manual trigger only
+  retries: 3                   # number of retry attempts per task on failure
+  retry_delay: 300             # seconds to wait between retries
+  timeout: 7200                # seconds a single task run may take before it is killed
+
+
+# ---------------------------------------------------------------------------
+# FILE WAIT
+# Job-level settings applied uniformly to every file in the ingestion stage.
+# ---------------------------------------------------------------------------
+file_wait:
+  timeout: 3600                # seconds to wait for a file to appear on the source before giving up
+  poke_interval: 60            # polling interval in seconds while waiting
+  on_missing: fail             # behaviour when a file does not arrive within timeout
+                               #   fail     — raise an exception and abort the job
+                               #   continue — log a warning, skip that ingestion step, and proceed
+
+
+# ---------------------------------------------------------------------------
+# CONNECTIONS
+# All values are Airflow connection IDs. No credentials are stored here.
+# ---------------------------------------------------------------------------
+connections:
+  source: "sftp_default"            # SFTP connection used by all ingestion tasks
+  destination: "postgres_default"   # DB connection used by the loading stage and post-loading SQL
+  blob_storage: "azure_blob_conn"   # (optional) Azure Blob / S3 connection ID
+                                    # When set, Parquet files produced between pipeline stages are
+                                    # written to blob storage instead of the local filesystem.
+                                    # Omit this key to use local disk (default).
+
+
+# ---------------------------------------------------------------------------
+# STAGES
+# Executed in order: ingestion → transformation → aggregation → loading.
+# Omit any stage block that is not needed for this job.
+# ---------------------------------------------------------------------------
+stages:
+
+  # ── Ingestion ─────────────────────────────────────────────────────────────
+  # One entry per source file. Each config path points to an ingestion YAML.
+  # The file_id declared inside each referenced config is used by later stages
+  # to reference that file's output Parquet.
+  ingestion:
+    - config: "docs/configs/account_comma_utf8.yml"
+    - config: "docs/configs/payment_delta.yml"
+
+  # ── Transformation ────────────────────────────────────────────────────────
+  # Points to a single transformation config that operates on the file_ids
+  # produced by the ingestion stage.
+  transformation:
+    config: "docs/transformations/example_transformation_config.yml"
+
+  # ── Aggregation ───────────────────────────────────────────────────────────
+  # Points to a single aggregation config. Aggregation runs after transformation.
+  aggregation:
+    config: "docs/aggregations/example_aggregation_config.yml"
+
+  # ── Loading ───────────────────────────────────────────────────────────────
+  # Points to a loading config that maps output file_ids to destination tables.
+  loading:
+    config: "docs/loading/example_loading_config.yml"
+
+
+# ---------------------------------------------------------------------------
+# POST-LOADING SQL
+# Executed against the destination DB after all loading tasks complete.
+# Statements within each block are executed in the order listed, in a single
+# transaction. connection_id defaults to connections.destination when omitted.
+# ---------------------------------------------------------------------------
+post_loading_sql:
+  - statements:
+      - "UPDATE staging.accounts SET loaded_flag = TRUE WHERE loaded_flag IS NULL"
+      - >-
+        INSERT INTO audit.load_log (job_id, loaded_at)
+        VALUES ('accounts_daily_load', CURRENT_TIMESTAMP)
