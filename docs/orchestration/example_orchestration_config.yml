@@ -19,8 +19,8 @@ description: "Daily ingestion, transformation, aggregation, and load of account 
 # Airflow DAG scheduling and retry parameters.
 # ---------------------------------------------------------------------------
 schedule:
-  cron: "0 6 * * *"            # cron expression — this example runs daily at 06:00
-                                # use "@once" to run exactly once; omit (or null) for manual trigger only
+  cron: "0 6 * * *"           # cron expression — this example runs daily at 06:00 optional
+ 
   retries: 3                   # number of retry attempts per task on failure
   retry_delay: 300             # seconds to wait between retries
   timeout: 7200                # seconds a single task run may take before it is killed
@@ -45,10 +45,10 @@ file_wait:
 connections:
   source: "sftp_default"            # SFTP connection used by all ingestion tasks
   destination: "postgres_default"   # DB connection used by the loading stage and post-loading SQL
-  blob_storage: "azure_blob_conn"   # (optional) Azure Blob / S3 connection ID
-                                    # When set, Parquet files produced between pipeline stages are
-                                    # written to blob storage instead of the local filesystem.
-                                    # Omit this key to use local disk (default).
+  blob_storage: "azure_blob_conn"   # (optional) override the default blob storage connection ID.
+                                    # Parquet files produced between pipeline stages are always written
+                                    # to blob storage. If omitted, the default blob storage connection
+                                    # configured at the environment level is used.
 
 
 # ---------------------------------------------------------------------------
@@ -64,23 +64,31 @@ stages:
   # to reference that file's output Parquet.
   ingestion:
     - config: "docs/configs/account_comma_utf8.yml"
+      # on_missing: fail             # (optional) override job-level file_wait.on_missing for this file only
+                                     #   fail     — raise an exception and abort the job
+                                     #   continue — log a warning, skip this file, and proceed
     - config: "docs/configs/payment_delta.yml"
+      on_missing: continue           # this file is optional — skip if not present
 
   # ── Transformation ────────────────────────────────────────────────────────
-  # Points to a single transformation config that operates on the file_ids
-  # produced by the ingestion stage.
+  # List of transformation configs. All tasks run in parallel.
+  # Each config declares which ingestion file_id it operates on.
   transformation:
-    config: "docs/transformations/example_transformation_config.yml"
+    - config: "docs/transformations/example_transformation_config.yml"
 
   # ── Aggregation ───────────────────────────────────────────────────────────
-  # Points to a single aggregation config. Aggregation runs after transformation.
+  # List of aggregation configs. Each task starts as soon as its declared
+  # upstream transformation config completes — not waiting for all transformations.
+  # Loading begins only after ALL aggregation tasks have completed.
   aggregation:
-    config: "docs/aggregations/example_aggregation_config.yml"
+    - config: "docs/aggregations/example_aggregation_config.yml"
+      depends_on: "docs/transformations/example_transformation_config.yml"  # upstream transformation
 
   # ── Loading ───────────────────────────────────────────────────────────────
-  # Points to a loading config that maps output file_ids to destination tables.
+  # Ordered list of loading configs. Tasks are executed sequentially in the
+  # order listed — each entry completes before the next begins.
   loading:
-    config: "docs/loading/example_loading_config.yml"
+    - config: "docs/loading/example_loading_config.yml"
 
 
 # ---------------------------------------------------------------------------
@@ -95,3 +103,19 @@ post_loading_sql:
       - >-
         INSERT INTO audit.load_log (job_id, loaded_at)
         VALUES ('accounts_daily_load', CURRENT_TIMESTAMP)
+
+
+# ---------------------------------------------------------------------------
+# ALERTS  (tentative — not implemented)
+# Notification behaviour on task/job lifecycle events.
+# Maps to Airflow on_failure_callback / on_retry_callback / on_success_callback.
+# ---------------------------------------------------------------------------
+# alerts:
+#   on_failure:
+#     email: ["etl-alerts@exus.co.uk"]
+#   on_retry:
+#     email: ["etl-alerts@exus.co.uk"]
+#   on_success:
+#     email: ["etl-reports@exus.co.uk"]
+#   # webhook:                         # (future) Slack / MS Teams webhook URL
+#   #   url: "https://hooks.slack.com/services/..."

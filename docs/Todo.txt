@@ -1,0 +1,3 @@
+Pipeline Versioning strategy
+> When a pipeline already exists (its DAG YAML is in dags) and a PR updates one of its configs — e.g. a transformation config changes — what happens to in-flight DAG runs that are currently executing against the old config?
+DAG failure notifications/email alerts
